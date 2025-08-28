@@ -12,13 +12,16 @@ import time
 import argparse
 import logging
 import multiprocessing as mp
-from typing import List
+import glob
+from typing import List, Optional, Tuple, Any
 
 # 导入自定义模块
-from src.utils import DirectoryDiscovery, create_standard_logger
+from src.utils import DirectoryDiscovery
+from src.logging import LoggerManager, create_standard_logger
 from src.io.path_manager import PathManager
 from src.core.system_analyzer import SystemAnalyzer, BatchAnalyzer
 from src.io.result_saver import ResultSaver
+from src.utils.data_utils import ErrorHandler
 
 try:
     from src.analysis.correlation_analyzer import CorrelationAnalyzer as ExternalCorrelationAnalyzer
@@ -27,16 +30,17 @@ except ImportError:
     CORRELATION_ANALYZER_AVAILABLE = False
 
 
-def _worker_analyze_system(system_path: str, include_h: bool, sample_ratio: float, power_p: float):
+def _worker_analyze_system(system_path: str, sample_ratio: float, power_p: float, pca_variance_ratio: float):
     """Top-level worker function for multiprocessing.
 
     Creates a local SystemAnalyzer in the child process to avoid pickling
     the parent-process analyzer instance.
     """
     analyzer = SystemAnalyzer(
-        include_hydrogen=include_h,
+        include_hydrogen=False,
         sample_ratio=sample_ratio,
-        power_p=power_p
+        power_p=power_p,
+        pca_variance_ratio=pca_variance_ratio
     )
     return analyzer.analyze_system(system_path)
 
@@ -45,13 +49,14 @@ def _worker_analyze_system(system_path: str, include_h: bool, sample_ratio: floa
 _GLOBAL_ANALYZER = None
 
 
-def _child_init(include_h: bool, sample_ratio: float, power_p: float):
+def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float):
     """Initializer for worker processes: create one SystemAnalyzer per process."""
     global _GLOBAL_ANALYZER
     _GLOBAL_ANALYZER = SystemAnalyzer(
-        include_hydrogen=include_h,
+        include_hydrogen=False,
         sample_ratio=sample_ratio,
-        power_p=power_p
+        power_p=power_p,
+        pca_variance_ratio=pca_variance_ratio
     )
 
 
@@ -63,7 +68,7 @@ def _child_worker(system_path: str):
     global _GLOBAL_ANALYZER
     if _GLOBAL_ANALYZER is None:
         # Fallback: construct a temporary analyzer (shouldn't happen when Pool initializer used)
-        return _worker_analyze_system(system_path, False, 0.05, 0.5)
+        return _worker_analyze_system(system_path, 0.05, 0.5, 0.90)
     return _GLOBAL_ANALYZER.analyze_system(system_path)
 
 
@@ -80,82 +85,161 @@ class MainApp:
         # 解析命令行参数
         args = self._parse_arguments()
         
-        # 配置日志 - 固定输出到analysis_results目录
+        # 配置日志 - 使用时间戳避免覆盖
         analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
         os.makedirs(analysis_results_dir, exist_ok=True)
-        self.logger = create_standard_logger(__name__, analysis_results_dir, "main_analysis.log")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        log_filename = f"main_analysis_{timestamp}.log"
+        log_file_path = os.path.join(analysis_results_dir, log_filename)
+        self.logger = create_standard_logger(__name__, logging.INFO, log_file_path)
         
         # 设置工作进程数
         workers = self._determine_workers(args.workers)
         
         # 记录启动信息
-        search_info = f"搜索路径: {args.search_path or '(当前目录的父目录)'}"
+        search_paths = self._resolve_search_paths(args.search_path)
+        search_info = f"搜索路径: {search_paths if search_paths else '(当前目录的父目录)'}"
         self.logger.info(f"ABACUS主分析器启动 | 采样比例: {args.sample_ratio} | 工作进程: {workers}")
         self.logger.info(search_info)
-        self.logger.info(f"日志文件: analysis_results/main_analysis.log")
+        self.logger.info(f"项目目录屏蔽: {'关闭' if args.include_project else '开启'}")
+        self.logger.info(f"强制重新计算: {'是' if args.force_recompute else '否'}")
+        self.logger.info(f"日志文件: analysis_results/{log_filename}")
         
         # 步骤1: 查找和管理系统目录
-        mol_systems = DirectoryDiscovery.find_abacus_systems(args.search_path)
+        mol_systems = self._discover_systems_from_paths(search_paths, args.include_project)
         if not mol_systems:
             self.logger.error("未找到符合格式的系统目录")
             return
         
-        # 步骤2: 初始化路径管理器
+        # 步骤2: 配置参数专用输出目录
+        self.logger.info("配置分析参数专用目录...")
+    # include_h 固定为 False，移除可选参数
+        current_analysis_params = {
+            'sample_ratio': args.sample_ratio,
+            'power_p': args.power_p,
+            'pca_variance_ratio': args.pca_variance_ratio
+        }
+
         path_manager = PathManager(args.output_dir)
-        path_manager.load_from_discovery(mol_systems)
-        path_manager.save_targets()
-        path_manager.save_summary()
-        path_manager.export_target_paths()
+        actual_output_dir = path_manager.set_output_dir_for_params(current_analysis_params)
+        self.logger.info(f"使用参数专用目录: {actual_output_dir}")
         
-        # 验证目标
-        valid_count, invalid_count = path_manager.validate_targets()
-        if valid_count == 0:
-            self.logger.error("没有有效的分析目标")
+        # 检查是否已有完整结果（快速路径）
+        if not args.force_recompute and path_manager.check_existing_complete_results():
+            self.logger.info("发现完整的分析结果，直接执行相关性分析")
+            self._run_correlation_analysis(actual_output_dir)
             return
+
+        # 步骤3: 初始化目标管理
+        self.logger.info("初始化分析目标管理...")
+        
+        # 尝试先加载已有的分析目标状态（从当前参数目录）
+        loaded_existing = path_manager.load_analysis_targets()
+        if loaded_existing:
+            self.logger.info("成功加载已有的分析目标状态")
+        else:
+            self.logger.info("未找到已有的分析目标文件，将创建新的")
+        
+        self.logger.info("加载发现结果到路径管理器...")
+        path_manager.load_from_discovery(mol_systems, preserve_existing=loaded_existing)
+        
+        # 去重处理（必须执行，无论是否跳过验证）
+        self.logger.info("执行重复体系去重（基于系统名称，保留修改时间最晚的）...")
+        path_manager.deduplicate_targets()
+        
+        # 参数一致性检查：检查分析参数是否与加载的参数兼容
+        params_compatible = False
+        if loaded_existing:
+            params_compatible = path_manager.check_params_compatibility(current_analysis_params)
+        
+        # 增量计算检查：检查已有的分析结果
+        if not args.force_recompute and params_compatible:
+            self.logger.info("检查已有分析结果以启用增量计算...")
+            path_manager.check_existing_results()
+        else:
+            if args.force_recompute:
+                self.logger.info("强制重新计算模式：重置所有系统状态为待处理")
+            elif not params_compatible and loaded_existing:
+                self.logger.info("参数不兼容：重置所有系统状态为待处理")
+            # 重置所有系统状态为pending
+            for target in path_manager.targets:
+                target.status = "pending"
         
         total_molecules = len(mol_systems)
         total_systems = sum(len(s) for s in mol_systems.values())
-        self.logger.info(f"发现 {total_molecules} 个分子，共 {total_systems} 个体系 (有效: {valid_count})")
+        final_targets = len(path_manager.targets)
+        self.logger.info(f"发现 {total_molecules} 个分子，共 {total_systems} 个体系，去重后 {final_targets} 个目标")
         
         # 步骤3: 创建分析器并执行分析
+        self.logger.info("创建系统分析器...")
         analyzer = SystemAnalyzer(
-            include_hydrogen=args.include_h,
+            include_hydrogen=False,
             sample_ratio=args.sample_ratio,
-            power_p=args.power_p
+            power_p=args.power_p,
+            pca_variance_ratio=args.pca_variance_ratio
         )
         
-        analysis_targets = path_manager.get_targets_by_status("pending")
+        analysis_targets = path_manager.get_targets_by_status("pending") + path_manager.get_targets_by_status("failed")
         system_paths = [target.system_path for target in analysis_targets]
+        completed_count = len(path_manager.get_targets_by_status("completed"))
+        
+        self.logger.info(f"准备分析 {len(system_paths)} 个系统（已完成: {completed_count}，待处理: {len(system_paths)}）...")
         
         # 执行分析
         if workers > 1:
+            self.logger.info(f"使用并行分析模式（{workers} 个工作进程）...")
             analysis_results = self._parallel_analysis(analyzer, system_paths, path_manager, workers)
         else:
+            self.logger.info("使用顺序分析模式...")
             analysis_results = self._sequential_analysis(analyzer, system_paths, path_manager)
         
         # 步骤4: 保存结果
         if analysis_results:
-            ResultSaver.save_all_results(args.output_dir, analysis_results)
+            self.logger.info("保存分析结果...")
+            
+            # 判断是否有已完成的系统（增量计算模式）
+            completed_systems = len(path_manager.get_targets_by_status("completed"))
+            is_incremental = completed_systems > 0 and not args.force_recompute
+            
+            if is_incremental:
+                self.logger.info(f"增量计算模式：合并 {len(analysis_results)} 个新结果与 {completed_systems} 个已有结果")
+                
+            # 使用统一的保存接口（incremental 标志决定是否合并已有结果）
+            self.logger.info("保存分析结果（含单体系详细结果与汇总）...")
+            ResultSaver.save_results(actual_output_dir, analysis_results, incremental=is_incremental)
             
             # 执行相关性分析
-            self._run_correlation_analysis(args.output_dir)
+            self._run_correlation_analysis(actual_output_dir)
+        elif len(path_manager.get_targets_by_status("completed")) > 0:
+            # 没有新的分析结果，但有已完成的系统
+            self.logger.info("所有系统均已完成分析，跳过结果保存")
+            # 仍然执行相关性分析
+            self._run_correlation_analysis(actual_output_dir)
         
         # 步骤5: 保存最终状态并输出统计
-        path_manager.save_targets()
-        path_manager.save_summary()
+        self.logger.info("保存分析目标状态...")
+        try:
+            path_manager.save_analysis_targets(current_analysis_params)
+        except Exception as e:
+            self.logger.error(f"保存分析目标失败: {str(e)}")
         
-        self._output_final_statistics(analysis_results, start_time, args.output_dir, path_manager)
+        self._output_final_statistics(analysis_results, start_time, actual_output_dir, path_manager)
     
     def _parse_arguments(self) -> argparse.Namespace:
         """解析命令行参数"""
         parser = argparse.ArgumentParser(description='ABACUS STRU轨迹主分析器')
-        parser.add_argument('--include_h', action='store_true', help='包含氢原子')
-        parser.add_argument('--sample_ratio', type=float, default=0.05, help='采样比例')
-        parser.add_argument('--power_p', type=float, default=0.5, help='幂平均距离的p值')
-        parser.add_argument('--workers', type=int, default=-1, help='并行工作进程数')
-        parser.add_argument('--output_dir', type=str, default="analysis_results", help='输出根目录')
-        parser.add_argument('--search_path', type=str, default=None, 
-                           help='递归搜索路径 (默认为当前目录的父目录)')
+        parser.add_argument('-r', '--sample_ratio', type=float, default=0.05, help='采样比例')
+        parser.add_argument('-p', '--power_p', type=float, default=-0.5, help='幂平均距离的p值')
+        parser.add_argument('-v', '--pca_variance_ratio', type=float, default=0.90, help='PCA降维累计方差贡献率 (0~1, 默认: 0.90)')
+        parser.add_argument('-w', '--workers', type=int, default=-1, help='并行工作进程数')
+        parser.add_argument('-o', '--output_dir', type=str, default="analysis_results", help='输出根目录')
+        parser.add_argument('-s', '--search_path', nargs='*', default=None, 
+                           help='递归搜索路径，支持多个路径和通配符 (默认为当前目录的父目录)')
+        parser.add_argument('-i', '--include_project', action='store_true', 
+                           help='允许搜索项目自身目录（默认屏蔽）')
+    # `--skip_single_results` 已移除；程序始终生成单体系详细结果
+        parser.add_argument('-f', '--force_recompute', action='store_true',
+                           help='强制重新计算所有系统，忽略已有的分析结果')
         return parser.parse_args()
     
     def _determine_workers(self, workers_arg: int) -> int:
@@ -164,11 +248,68 @@ class MainApp:
             try:
                 workers = int(os.environ.get('SLURM_CPUS_PER_TASK', 
                            os.environ.get('SLURM_JOB_CPUS_PER_NODE', mp.cpu_count())))
-            except:
+            except Exception as e:
+                self.logger.warning(f"Failed to determine optimal worker count from environment: {e}")
                 workers = max(1, mp.cpu_count())
         else:
             workers = max(1, workers_arg)
         return workers
+    
+    def _resolve_search_paths(self, search_path_args: List[str]) -> List[str]:
+        """解析搜索路径，支持通配符展开"""
+        if not search_path_args:
+            # 默认使用当前目录的父目录
+            return [os.path.abspath(os.path.join(os.getcwd(), '..'))]
+        
+        resolved_paths = []
+        for path_pattern in search_path_args:
+            # 展开通配符
+            expanded = glob.glob(path_pattern, recursive=True)
+            if expanded:
+                # 只保留目录
+                expanded_dirs = [p for p in expanded if os.path.isdir(p)]
+                resolved_paths.extend(expanded_dirs)
+                if expanded_dirs:
+                    self.logger.info(f"通配符 '{path_pattern}' 展开为 {len(expanded_dirs)} 个目录")
+                else:
+                    self.logger.warning(f"通配符 '{path_pattern}' 未匹配到任何目录")
+            else:
+                # 没有匹配，检查是否为普通路径
+                if os.path.isdir(path_pattern):
+                    resolved_paths.append(path_pattern)
+                else:
+                    self.logger.warning(f"路径不存在或不是目录: {path_pattern}")
+        
+        # 去重并规范化路径
+        unique_paths = list(set(os.path.abspath(p) for p in resolved_paths))
+        return unique_paths
+    
+    def _discover_systems_from_paths(self, search_paths: List[str], include_project: bool = False) -> dict:
+        """从多个搜索路径发现ABACUS系统"""
+        all_mol_systems = {}
+        
+        for search_path in search_paths:
+            self.logger.info(f"搜索路径: {search_path}")
+            try:
+                # 根据include_project标志调用相应的发现方法
+                if include_project:
+                    # 需要修改DirectoryDiscovery以支持include_project参数
+                    mol_systems = DirectoryDiscovery.find_abacus_systems(search_path, include_project=True)
+                else:
+                    mol_systems = DirectoryDiscovery.find_abacus_systems(search_path)
+                
+                # 合并结果
+                for mol_key, system_paths in mol_systems.items():
+                    if mol_key in all_mol_systems:
+                        all_mol_systems[mol_key].extend(system_paths)
+                    else:
+                        all_mol_systems[mol_key] = system_paths
+                
+                self.logger.info(f"在 {search_path} 中发现 {len(mol_systems)} 个分子类型")
+            except Exception as e:
+                self.logger.error(f"搜索路径 {search_path} 时出错: {str(e)}")
+        
+        return all_mol_systems
     
     def _parallel_analysis(self, analyzer: SystemAnalyzer, system_paths: List[str], 
                           path_manager: PathManager, workers: int) -> List[tuple]:
@@ -176,7 +317,7 @@ class MainApp:
         analysis_results = []
         # Use a Pool initializer to create one SystemAnalyzer per worker process and
         # use imap_unordered with a calculated chunksize for better throughput.
-        initializer_args = (analyzer.include_hydrogen, analyzer.sample_ratio, analyzer.power_p)
+        initializer_args = (analyzer.sample_ratio, analyzer.power_p, analyzer.pca_variance_ratio)
         chunksize = max(1, len(system_paths) // (workers * 4)) if system_paths else 1
 
         with mp.Pool(processes=workers, initializer=_child_init, initargs=initializer_args) as pool:
@@ -201,7 +342,14 @@ class MainApp:
                         # Unknown which path failed; best-effort mark if we can
                         self.logger.warning("并行分析返回空结果，标记为失败")
             except Exception as e:
-                self.logger.error(f"并行处理出错: {str(e)}")
+                ErrorHandler.log_detailed_error(
+                    self.logger, e, "并行处理出错",
+                    additional_info={
+                        "工作进程数": workers,
+                        "系统路径数量": len(system_paths) if system_paths else 0,
+                        "已完成数量": len(analysis_results)
+                    }
+                )
         return analysis_results
     
     def _sequential_analysis(self, analyzer: SystemAnalyzer, system_paths: List[str], 
@@ -224,7 +372,13 @@ class MainApp:
                     
             except Exception as e:
                 path_manager.update_target_status(system_path, "failed")
-                self.logger.error(f"处理体系 {system_path} 时出错: {str(e)}")
+                ErrorHandler.log_detailed_error(
+                    self.logger, e, f"处理体系 {system_path} 时出错",
+                    additional_info={
+                        "当前索引": f"({i+1}/{len(system_paths)})",
+                        "系统路径": system_path
+                    }
+                )
         
         return analysis_results
     
@@ -254,7 +408,6 @@ class MainApp:
         
         # 计算采样统计
         swap_counts = [result[3] for result in analysis_results if len(result) > 3]
-        improve_ratios = [result[4] for result in analysis_results if len(result) > 4]
         
         self.logger.info("=" * 60)
         self.logger.info(f"分析完成! 处理体系: {len(analysis_results)}/{progress_summary['total']}")
@@ -266,8 +419,7 @@ class MainApp:
             import numpy as np
             self.logger.info(f"采样优化统计:")
             self.logger.info(f"  平均交换次数: {np.mean(swap_counts):.2f}")
-            self.logger.info(f"  平均改善率: {np.mean(improve_ratios):.2%}")
-            self.logger.info(f"  总交换次数: {sum(swap_counts)}")
+            self.logger.info(f"  总交换次数: {int(sum(swap_counts))}")
         
         self.logger.info(f"总耗时: {elapsed:.1f}s ({elapsed/60:.1f} 分钟)")
         self.logger.info(f"结果目录: {output_dir}")
