@@ -245,30 +245,50 @@ class DirectoryDiscovery:
     """
 
     @staticmethod
-    def find_abacus_systems(search_path: Optional[str] = None) -> Dict[str, List[str]]:
+    def find_abacus_systems(search_path: Optional[str] = None, include_project: bool = False) -> Dict[str, List[str]]:
         """Find ABACUS system directories.
 
         Args:
             search_path: root to search. If None, use parent of cwd.
+            include_project: if True, don't skip this project's directory.
 
         Returns:
             Mapping from molecule id (str) to list of system directory paths.
             Returns empty dict when nothing found.
         """
+        # Determine root to search
         root = search_path
         if not root:
             root = os.path.abspath(os.path.join(os.getcwd(), '..'))
+        root = os.path.abspath(root)
 
-        found = {}
+        # Compute this project's top-level directory and common dirs to ignore
+        this_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        ignored_dirnames = {'__pycache__', '.git', 'analysis_results', 'venv', 'env', 'node_modules', '.venv'}
+
+        found: Dict[str, List[str]] = {}
         try:
-            for dirpath, dirnames, filenames in os.walk(root):
+            # Walk top-down so we can prune directories we don't need to descend into
+            for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+                # Normalize path for comparisons
+                norm_dirpath = os.path.abspath(dirpath)
+
+                # Skip scanning inside this project folder itself to avoid detecting test data or outputs
+                if not include_project and norm_dirpath.startswith(this_project_root):
+                    # don't descend further from this directory
+                    dirnames[:] = []
+                    continue
+
+                # Prune common ignored directories to speed up traversal
+                if dirnames:
+                    dirnames[:] = [d for d in dirnames if d not in ignored_dirnames]
+
                 # look for the ABACUS STRU directory structure
                 if 'OUT.ABACUS' in dirnames:
                     stru_path = os.path.join(dirpath, 'OUT.ABACUS', 'STRU')
                     if os.path.isdir(stru_path):
                         # Derive molecule id from directory name if possible
                         base = os.path.basename(dirpath)
-                        # group everything under a single key if parsing fails
                         mol_key = base
                         found.setdefault(mol_key, []).append(dirpath)
         except Exception:
