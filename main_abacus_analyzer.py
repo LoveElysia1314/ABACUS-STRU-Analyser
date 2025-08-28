@@ -15,17 +15,30 @@ import multiprocessing as mp
 from typing import List
 
 # 导入自定义模块
-from utils import DirectoryDiscovery, create_standard_logger
-from path_manager import PathManager
-from system_analyzer import SystemAnalyzer, BatchAnalyzer
-from result_saver import ResultSaver
+from src.utils import DirectoryDiscovery, create_standard_logger
+from src.io.path_manager import PathManager
+from src.core.system_analyzer import SystemAnalyzer, BatchAnalyzer
+from src.io.result_saver import ResultSaver
 
-# 导入相关性分析器（可选）
 try:
-    from correlation_analyzer import CorrelationAnalyzer as ExternalCorrelationAnalyzer
+    from src.analysis.correlation_analyzer import CorrelationAnalyzer as ExternalCorrelationAnalyzer
     CORRELATION_ANALYZER_AVAILABLE = True
 except ImportError:
     CORRELATION_ANALYZER_AVAILABLE = False
+
+
+def _worker_analyze_system(system_path: str, include_h: bool, sample_ratio: float, power_p: float):
+    """Top-level worker function for multiprocessing.
+
+    Creates a local SystemAnalyzer in the child process to avoid pickling
+    the parent-process analyzer instance.
+    """
+    analyzer = SystemAnalyzer(
+        include_hydrogen=include_h,
+        sample_ratio=sample_ratio,
+        power_p=power_p
+    )
+    return analyzer.analyze_system(system_path)
 
 
 class MainApp:
@@ -135,15 +148,15 @@ class MainApp:
                           path_manager: PathManager, workers: int) -> List[tuple]:
         """并行分析系统"""
         analysis_results = []
-        
+        # Use a top-level worker function to avoid pickling the analyzer instance
         with mp.Pool(workers) as pool:
-            results = [pool.apply_async(analyzer.analyze_system, (path,)) for path in system_paths]
-            
+            results = [pool.apply_async(_worker_analyze_system, (path, analyzer.include_hydrogen, analyzer.sample_ratio, analyzer.power_p)) for path in system_paths]
+
             for i, res in enumerate(results):
                 try:
                     current_path = system_paths[i]
                     path_manager.update_target_status(current_path, "processing")
-                    
+
                     result = res.get()
                     if result:
                         analysis_results.append(result)
@@ -152,7 +165,7 @@ class MainApp:
                     else:
                         path_manager.update_target_status(current_path, "failed")
                         self.logger.warning(f"分析失败 ({i+1}/{len(system_paths)}): {current_path}")
-                        
+
                 except Exception as e:
                     if i < len(system_paths):
                         path_manager.update_target_status(system_paths[i], "failed")

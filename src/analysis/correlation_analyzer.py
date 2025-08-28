@@ -51,12 +51,14 @@ from typing import Optional, List, Dict, Tuple
 import pandas as pd
 import numpy as np
 from scipy import stats
+import shutil
 
 # 导入工具模块
-from utils import (
+from ..utils import (
     LoggerManager, FileUtils, DataUtils, MathUtils, ValidationUtils, 
     Constants, create_standard_logger
 )
+
 
 
 class CorrelationAnalyzer:
@@ -116,8 +118,7 @@ class CorrelationAnalyzer:
                 file_handler = LoggerManager.add_file_handler(
                     self.logger, log_file,
                     Constants.DEFAULT_LOG_FORMAT, 
-                    Constants.DEFAULT_DATE_FORMAT,
-                    encoding='utf-8'
+                    Constants.DEFAULT_DATE_FORMAT
                 )
             
             # 检查输入文件是否存在
@@ -183,165 +184,28 @@ class CorrelationAnalyzer:
             
             return False
     
-    # 以下分子级分析方法已不再使用，保留仅供参考
-    def _analyze_temperature_correlations_unused(self, df: pd.DataFrame, molecules: List) -> List[Dict]:
-        """分析温度与各指标的相关性（以分子为单位控制构象变量）"""
-        temp_results = []
-        
-        # 统计有效的分子-构象组合
-        valid_combinations = 0
-        total_combinations = 0
-        insufficient_data_count = 0
-        
-        for molecule in molecules:
-            # 获取该分子的所有数据
-            mol_df = df[df['Molecule_ID'] == molecule]
-            configs_in_mol = sorted(mol_df['Configuration'].unique())
-            
-            for config in configs_in_mol:
-                total_combinations += 1
-                # 在单一分子的单一构象下分析温度影响
-                mol_config_df = mol_df[mol_df['Configuration'] == config]
-                
-                # 检查该分子构象下是否有足够的温度变化
-                unique_temps = mol_config_df['Temperature(K)'].unique()
-                if len(unique_temps) < 2:
-                    insufficient_data_count += 1
-                    continue
-                
-                # 样本量太小（通常<5），统计意义有限，但仍记录用于汇总
-                valid_combinations += 1
-                
-                for indicator in self.indicators:
-                    # 检查数据有效性
-                    valid_data = mol_config_df[['Temperature(K)', indicator]].dropna()
-                    if len(valid_data) < 2:
-                        continue
-                    
-                    # Pearson相关系数（线性相关）
-                    pearson_r, pearson_p = stats.pearsonr(
-                        valid_data['Temperature(K)'], valid_data[indicator]
-                    )
-                    # Spearman相关系数（秩相关）
-                    spearman_r, spearman_p = stats.spearmanr(
-                        valid_data['Temperature(K)'], valid_data[indicator]
-                    )
-                    
-                    temp_results.append({
-                        'Molecule_ID': molecule,
-                        'Configuration': config,
-                        'Variable': 'Temperature',
-                        'Indicator': indicator,
-                        'Sample_Size': len(valid_data),
-                        'Temperature_Range': f"{min(unique_temps)}-{max(unique_temps)}K",
-                        'Pearson_r': pearson_r,
-                        'Pearson_p': pearson_p,
-                        'Spearman_r': spearman_r,
-                        'Spearman_p': spearman_p,
-                        'Significance': 'Yes' if pearson_p < 0.05 else 'No'
-                    })
-        
-        return temp_results
-    
-    def _analyze_configuration_effects_unused(self, df: pd.DataFrame, molecules: List) -> List[Dict]:
-        """分析构象与各指标的关系（以分子为单位控制温度变量）"""
-        config_results = []
-        
-        # 统计有效的分子-温度组合
-        valid_combinations = 0
-        total_combinations = 0
-        insufficient_data_count = 0
-        
-        for molecule in molecules:
-            # 获取该分子的所有数据
-            mol_df = df[df['Molecule_ID'] == molecule]
-            temperatures_in_mol = sorted(mol_df['Temperature(K)'].unique())
-            
-            for temp in temperatures_in_mol:
-                total_combinations += 1
-                # 在单一分子的单一温度下分析构象影响
-                mol_temp_df = mol_df[mol_df['Temperature(K)'] == temp]
-                
-                # 检查该分子温度下是否有多种构象
-                available_configs = mol_temp_df['Configuration'].unique()
-                if len(available_configs) < 2:
-                    insufficient_data_count += 1
-                    continue
-                
-                # 样本量太小，统计意义有限，但仍记录用于汇总
-                valid_combinations += 1
-                
-                for indicator in self.indicators:
-                    # 检查数据有效性
-                    valid_mol_temp_df = mol_temp_df[[indicator, 'Configuration']].dropna()
-                    if len(valid_mol_temp_df) < 2:
-                        continue
-                    
-                    # 准备各构象组的数据
-                    groups = []
-                    config_labels = []
-                    for config in available_configs:
-                        group_data = valid_mol_temp_df[valid_mol_temp_df['Configuration'] == config][indicator].values
-                        if len(group_data) > 0:
-                            groups.append(group_data)
-                            config_labels.append(config)
-                    
-                    # 确保至少有一个有效组，且每组至少有2个样本
-                    if len(groups) < 1:
-                        continue
-                    
-                    # 检查每组的样本量，每组至少需要2个样本才能进行ANOVA
-                    if any(len(group) < 2 for group in groups):
-                        continue
-                    
-                    # 执行单因素方差分析
-                    f_stat, p_value = stats.f_oneway(*groups)
-                    
-                    # 计算Eta平方（效应量）
-                    indicator_data = valid_mol_temp_df[indicator]
-                    ss_total = np.sum((indicator_data - indicator_data.mean()) ** 2)
-                    ss_between = sum([
-                        len(group) * (np.mean(group) - indicator_data.mean()) ** 2 
-                        for group in groups if len(group) > 0
-                    ])
-                    eta_squared = ss_between / ss_total if ss_total > 0 else 0
-                    
-                    # 计算各组的描述性统计
-                    group_stats = {}
-                    for i, config in enumerate(config_labels):
-                        group_data = groups[i]
-                        if len(group_data) > 0:
-                            group_stats[f'Config_{config}_mean'] = np.mean(group_data)
-                            group_stats[f'Config_{config}_std'] = np.std(group_data)
-                            group_stats[f'Config_{config}_n'] = len(group_data)
-                    
-                    config_results.append({
-                        'Molecule_ID': molecule,
-                        'Temperature': temp,
-                        'Variable': 'Configuration',
-                        'Indicator': indicator,
-                        'Configurations': sorted(config_labels),
-                        'F_statistic': f_stat,
-                        'P_value': p_value,
-                        'Eta_squared': eta_squared,
-                        'Significance': 'Yes' if p_value < 0.05 else 'No',
-                        **group_stats
-                    })
-        
-        return config_results
-    
     def _analyze_global_temperature_correlations(self, df: pd.DataFrame) -> List[Dict]:
         """分析全局温度相关性（跨所有分子和构象）"""
         global_temp_results = []
         
         # 检查是否有足够的温度变化
         unique_temps = df['Temperature(K)'].unique()
+        total_systems = len(df)
+        
+        # 计算总的有效数据
+        overall_valid_data = DataUtils.clean_dataframe(df, ['Temperature(K)'] + self.indicators)
+        overall_valid_systems = len(overall_valid_data)
+        overall_filtered_systems = total_systems - overall_valid_systems
+        
         if not ValidationUtils.validate_sample_size(unique_temps, min_size=2):
+            self.logger.warning(f"温度种类不足({len(unique_temps)}<2)，跳过温度相关性分析")
             return global_temp_results
         
         for indicator in self.indicators:
             # 检查数据有效性
             valid_data = DataUtils.clean_dataframe(df, ['Temperature(K)', indicator])
+            valid_systems = len(valid_data)
+            
             if not ValidationUtils.validate_sample_size(valid_data, min_size=2):
                 continue
             
@@ -354,17 +218,22 @@ class CorrelationAnalyzer:
                 valid_data['Temperature(K)'], valid_data[indicator]
             )
             
+            significance = 'Yes' if pearson_p < 0.05 else 'No'
+            corr_strength = self._get_correlation_strength(abs(pearson_r))
+            
             global_temp_results.append({
                 'Analysis_Type': 'Global_Temperature',
                 'Variable': 'Temperature',
                 'Indicator': indicator,
-                'Sample_Size': len(valid_data),
+                'Sample_Size': valid_systems,
+                'Total_Systems': total_systems,
+                'Filtered_Systems': total_systems - valid_systems,
                 'Temperature_Range': f"{min(unique_temps)}-{max(unique_temps)}K",
                 'Pearson_r': pearson_r,
                 'Pearson_p': pearson_p,
                 'Spearman_r': spearman_r,
                 'Spearman_p': spearman_p,
-                'Significance': 'Yes' if pearson_p < 0.05 else 'No'
+                'Significance': significance
             })
         
         return global_temp_results
@@ -375,23 +244,36 @@ class CorrelationAnalyzer:
         
         # 检查是否有足够的构象变化
         unique_configs = df['Configuration'].unique()
+        total_systems = len(df)
+        
+        # 计算总的有效数据
+        overall_valid_data = DataUtils.clean_dataframe(df, ['Configuration'] + self.indicators)
+        overall_valid_systems = len(overall_valid_data)
+        overall_filtered_systems = total_systems - overall_valid_systems
+        
         if not ValidationUtils.validate_sample_size(unique_configs, min_size=2):
+            self.logger.warning(f"构象种类不足({len(unique_configs)}<2)，跳过构象效应分析")
             return global_config_results
         
         for indicator in self.indicators:
             # 检查数据有效性
             valid_data = DataUtils.clean_dataframe(df, ['Configuration', indicator])
+            valid_systems = len(valid_data)
+            
             if not ValidationUtils.validate_sample_size(valid_data, min_size=2):
                 continue
             
             # 准备各构象组的数据
             groups = []
             config_labels = []
+            group_sample_counts = []
+            
             for config in unique_configs:
                 group_data = valid_data[valid_data['Configuration'] == config][indicator].values
                 if len(group_data) > 0:
                     groups.append(group_data)
                     config_labels.append(config)
+                    group_sample_counts.append(len(group_data))
             
             # 确保至少有两个有效组
             if not ValidationUtils.validate_sample_size(groups, min_size=2):
@@ -413,6 +295,13 @@ class CorrelationAnalyzer:
             ])
             eta_squared = DataUtils.safe_divide(ss_between, ss_total, default=0.0)
             
+            significance = 'Yes' if p_value < 0.05 else 'No'
+            effect_strength = self._get_effect_size_interpretation(eta_squared)
+            
+            # 构建分组信息
+            group_info = [f"Config{config}:{count}" for config, count in zip(config_labels, group_sample_counts)]
+            group_info_str = ', '.join(group_info)
+            
             # 计算各组的描述性统计
             group_stats = {}
             for i, config in enumerate(config_labels):
@@ -426,12 +315,14 @@ class CorrelationAnalyzer:
                 'Analysis_Type': 'Global_Configuration',
                 'Variable': 'Configuration',
                 'Indicator': indicator,
-                'Sample_Size': len(valid_data),
+                'Sample_Size': valid_systems,
+                'Total_Systems': total_systems,
+                'Filtered_Systems': total_systems - valid_systems,
                 'Configurations': sorted(config_labels),
                 'F_statistic': f_stat,
                 'P_value': p_value,
                 'Eta_squared': eta_squared,
-                'Significance': 'Yes' if p_value < 0.05 else 'No',
+                'Significance': significance,
                 **group_stats
             })
         
@@ -444,6 +335,19 @@ class CorrelationAnalyzer:
     def _get_effect_size_interpretation(self, eta_squared: float) -> str:
         """获取效应量解释"""
         return MathUtils.calculate_effect_size_interpretation(eta_squared)
+    
+    def _get_confidence_level(self, p_value: float) -> str:
+        """获取置信程度评价"""
+        if p_value < 0.001:
+            return "99.9%置信"
+        elif p_value < 0.01:
+            return "99%置信"
+        elif p_value < 0.05:
+            return "95%置信"
+        elif p_value < 0.1:
+            return "90%置信"
+        else:
+            return "不显著"
     
     def _save_results(self, temp_results: List[Dict], config_results: List[Dict], global_temp_results: List[Dict], global_config_results: List[Dict], output_dir: str) -> None:
         """保存分析结果到CSV文件（仅保存全局分析结果）"""
@@ -460,13 +364,20 @@ class CorrelationAnalyzer:
                 DataUtils.format_number(abs(result['Pearson_r'])),
                 result['Significance'],
                 self._get_correlation_strength(abs(result['Pearson_r'])),
-                result['Sample_Size'],
-                f"Spearman_r={result['Spearman_r']:.3f}; Range={result['Temperature_Range']}"
+                f"{result['Sample_Size']}/{result['Total_Systems']}",
+                f"Filtered:{result['Filtered_Systems']}; Spearman_r={result['Spearman_r']:.3f}; Range={result['Temperature_Range']}"
             ])
         
         # 保存全局构象效应结果
         for result in global_config_results:
             configs_str = ','.join(map(str, result['Configurations']))
+            # 构建各组样本量信息
+            group_sample_info = []
+            for config in result['Configurations']:
+                if f'Config_{config}_n' in result:
+                    group_sample_info.append(f"Config{config}:{result[f'Config_{config}_n']}")
+            group_sample_str = ','.join(group_sample_info)
+            
             main_data.append([
                 'Configuration_Effect', result['Indicator'],
                 DataUtils.format_number(result['F_statistic']), 
@@ -474,8 +385,8 @@ class CorrelationAnalyzer:
                 DataUtils.format_number(result['Eta_squared']),
                 result['Significance'],
                 self._get_effect_size_interpretation(result['Eta_squared']),
-                result['Sample_Size'],
-                f"Configs=[{configs_str}]"
+                f"{result['Sample_Size']}/{result['Total_Systems']}",
+                f"Filtered:{result['Filtered_Systems']}; Configs=[{configs_str}]; Groups:[{group_sample_str}]"
             ])
         
         # 写入主要结果文件
@@ -483,7 +394,7 @@ class CorrelationAnalyzer:
             main_csv_path, main_data,
             headers=[
                 'Analysis_Type', 'Indicator', 'Statistic_Value', 'P_value', 
-                'Effect_Size', 'Significance', 'Interpretation', 'Sample_Size', 'Additional_Info'
+                'Effect_Size', 'Significance', 'Interpretation', 'Valid_Samples', 'Additional_Info'
             ],
             encoding='utf-8'
         )
@@ -526,11 +437,26 @@ class CorrelationAnalyzer:
         self.logger.info("相关性分析总结:")
         
         # 数据概览信息（仅使用全局数据）
-        total_samples = global_temp_results[0]['Sample_Size'] if global_temp_results else 0
-        temp_range = global_temp_results[0]['Temperature_Range'] if global_temp_results else "未知"
-        configs = global_config_results[0]['Configurations'] if global_config_results else []
+        if global_temp_results:
+            first_temp_result = global_temp_results[0]
+            total_samples = first_temp_result['Total_Systems']
+            valid_samples_temp = first_temp_result['Sample_Size']
+            filtered_samples_temp = first_temp_result['Filtered_Systems']
+            temp_range = first_temp_result['Temperature_Range']
+            
+            self.logger.info(f"数据概览: 总计{total_samples}个体系")
+            self.logger.info(f"  温度分析有效样本: {valid_samples_temp}/{total_samples} (过滤{filtered_samples_temp}个)")
+            self.logger.info(f"  温度范围: {temp_range}")
         
-        self.logger.info(f"数据概览: {total_samples}个样本, 温度范围{temp_range}, 构象{self._to_python_list(sorted(configs))}")
+        if global_config_results:
+            first_config_result = global_config_results[0]
+            total_samples = first_config_result['Total_Systems']
+            valid_samples_config = first_config_result['Sample_Size']
+            filtered_samples_config = first_config_result['Filtered_Systems']
+            configs = first_config_result['Configurations']
+            
+            self.logger.info(f"  构象分析有效样本: {valid_samples_config}/{total_samples} (过滤{filtered_samples_config}个)")
+            self.logger.info(f"  构象类型: {self._to_python_list(sorted(configs))}")
         
         # 全局温度相关性分析
         if global_temp_results:
@@ -538,9 +464,9 @@ class CorrelationAnalyzer:
             self.logger.info(f"全局温度相关性: {len(significant_global)}/{len(global_temp_results)}个指标显著相关")
             
             for result in global_temp_results:
-                significance_mark = "***" if result['Significance'] == 'Yes' else ""
+                confidence_level = self._get_confidence_level(result['Pearson_p'])
                 corr_strength = self._get_correlation_strength(abs(result['Pearson_r']))
-                self.logger.info(f"  {result['Indicator']}: r={result['Pearson_r']:.3f} (p={result['Pearson_p']:.3f}) {significance_mark} - {corr_strength}")
+                self.logger.info(f"  {result['Indicator']}: r={result['Pearson_r']:.3f} (p={result['Pearson_p']:.3f}) - {corr_strength}, {confidence_level}")
             
             if significant_global:
                 strongest_global = max(significant_global, key=lambda x: abs(x['Pearson_r']))
@@ -552,13 +478,13 @@ class CorrelationAnalyzer:
             self.logger.info(f"全局构象效应: {len(significant_global_config)}/{len(global_config_results)}个指标显著")
             
             for result in global_config_results:
-                significance_mark = "***" if result['Significance'] == 'Yes' else ""
+                confidence_level = self._get_confidence_level(result['P_value'])
                 effect_strength = self._get_effect_size_interpretation(result['Eta_squared'])
-                self.logger.info(f"  {result['Indicator']}: F={result['F_statistic']:.3f} (p={result['P_value']:.3f}), η²={result['Eta_squared']:.3f} {significance_mark} - {effect_strength}")
+                self.logger.info(f"  {result['Indicator']}: F={result['F_statistic']:.3f} (p={result['P_value']:.3f}), eta²={result['Eta_squared']:.3f} - {effect_strength}, {confidence_level}")
             
             if significant_global_config:
                 strongest_config = max(significant_global_config, key=lambda x: x['Eta_squared'])
-                self.logger.info(f"  最强效应: {strongest_config['Indicator']} (η²={strongest_config['Eta_squared']:.3f})")
+                self.logger.info(f"  最强效应: {strongest_config['Indicator']} (eta²={strongest_config['Eta_squared']:.3f})")
         
         self.logger.info("=" * 50)
 
