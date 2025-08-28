@@ -1,0 +1,23 @@
+2025-08-13 16:34:36,503 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:34:38,500 - ERROR - 并行处理失败: 'MetricsCalculator' object has no attribute 'compute_frame_nld_rms'
+2025-08-13 16:34:38,500 - ERROR - 分析失败
+2025-08-13 16:35:09,331 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:35:11,154 - ERROR - 并行处理失败: 'MetricsCalculator' object has no attribute 'compute_frame_nld_rms'
+2025-08-13 16:35:11,155 - ERROR - 分析失败
+2025-08-13 16:35:43,107 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:35:44,883 - ERROR - 并行处理失败: 'AdaptiveSampler' object has no attribute 'sample_frames'
+2025-08-13 16:35:44,883 - ERROR - 分析失败
+2025-08-13 16:35:51,362 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:35:53,335 - ERROR - 并行处理失败: 'AdaptiveSampler' object has no attribute 'sample_frames'
+2025-08-13 16:35:53,335 - ERROR - 分析失败
+2025-08-13 16:37:12,654 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:37:14,060 - ERROR - 并行处理失败: 'SystemAnalyzer' object has no attribute 'analyze_system'
+2025-08-13 16:37:14,061 - ERROR - 分析失败
+2025-08-13 16:39:24,473 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:39:25,772 - ERROR - 并行处理失败: 'SystemAnalyzer' object has no attribute 'analyze_system'
+2025-08-13 16:39:25,773 - ERROR - 分析失败
+2025-08-13 16:39:43,405 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:40:00,229 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:41:46,848 - INFO - 使用 7 个进程分析 7 个系统
+2025-08-13 16:41:48,121 - ERROR - 并行处理失败: 'SystemAnalyzer' object has no attribute 'analyze_system'
+2025-08-13 16:41:48,121 - ERROR - 分析失败
