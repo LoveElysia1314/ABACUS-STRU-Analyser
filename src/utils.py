@@ -245,12 +245,11 @@ class DirectoryDiscovery:
     """
 
     @staticmethod
-    def find_abacus_systems(search_path: Optional[str] = None, include_project: bool = False) -> Dict[str, List[str]]:
+    def find_abacus_systems(search_path: Optional[str] = None) -> Dict[str, List[str]]:
         """Find ABACUS system directories.
 
         Args:
             search_path: root to search. If None, use parent of cwd.
-            include_project: if True, don't skip this project's directory.
 
         Returns:
             Mapping from molecule id (str) to list of system directory paths.
@@ -274,7 +273,7 @@ class DirectoryDiscovery:
                 norm_dirpath = os.path.abspath(dirpath)
 
                 # Skip scanning inside this project folder itself to avoid detecting test data or outputs
-                if not include_project and norm_dirpath.startswith(this_project_root):
+                if norm_dirpath.startswith(this_project_root):
                     # don't descend further from this directory
                     dirnames[:] = []
                     continue

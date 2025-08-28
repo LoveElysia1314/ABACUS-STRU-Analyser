@@ -35,7 +35,7 @@ class SystemAnalyzer:
         if not frames:
             self.logger.warning(f"未找到有效轨迹数据: {system_dir}")
             return None
-        metrics = TrajectoryMetrics(system_name, mol_id, conf, temperature, system_dir)
+        metrics = TrajectoryMetrics(system_name, mol_id, conf, temperature)
         metrics.num_frames = len(frames)
         distance_vectors = []
         for frame in frames:

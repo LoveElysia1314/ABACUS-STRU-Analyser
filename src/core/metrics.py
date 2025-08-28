@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import os
 from typing import Dict, List
 import numpy as np
 from scipy.spatial.distance import pdist
@@ -64,12 +63,11 @@ class MetricCalculator:
 
 
 class TrajectoryMetrics:
-	def __init__(self, system_name: str, mol_id: str, conf: str, temperature: str, system_path: str = ""):
+	def __init__(self, system_name: str, mol_id: str, conf: str, temperature: str):
 		self.system_name = system_name
 		self.mol_id = mol_id
 		self.conf = conf
 		self.temperature = temperature
-		self.system_path = system_path  # 添加系统路径
 		self.num_frames = 0
 		self.dimension = 0
 		self.nRMSF = 0.0
@@ -79,13 +77,6 @@ class TrajectoryMetrics:
 		self.MCV_sampled = 0.0
 		self.avg_nLdRMS_sampled = 0.0
 		self.sampled_frames = []
-	
-	@property
-	def out_abacus_path(self) -> str:
-		"""返回OUT.ABACUS文件夹的路径"""
-		if self.system_path:
-			return os.path.join(self.system_path, "OUT.ABACUS")
-		return ""
 
 	def set_original_metrics(self, metrics_data: Dict[str, float]):
 		self.nRMSF = metrics_data['nRMSF']
