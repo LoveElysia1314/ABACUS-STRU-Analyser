@@ -22,6 +22,7 @@ from src.io.path_manager import PathManager
 from src.core.system_analyser import SystemAnalyser, BatchAnalyser
 from src.io.result_saver import ResultSaver
 from src.utils.data_utils import ErrorHandler
+from src.utils.file_utils import FileUtils
 
 try:
     from src.analysis.correlation_analyser import CorrelationAnalyser as ExternalCorrelationAnalyser
@@ -98,7 +99,7 @@ class MainApp:
         args = self._parse_arguments()
         
         # 配置多进程安全日志系统
-        analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
+        analysis_results_dir = os.path.join(FileUtils.get_project_root(), "analysis_results")
         os.makedirs(analysis_results_dir, exist_ok=True)
 
         # 创建多进程日志队列和监听器
@@ -181,6 +182,8 @@ class MainApp:
         # 检查是否已有完整结果（快速路径）
         if not args.force_recompute and path_manager.check_existing_complete_results():
             self.logger.info("发现完整的分析结果，直接执行相关性分析")
+            # 加载采样帧信息
+            path_manager.load_sampled_frames_from_csv()
             self._run_correlation_analysis(actual_output_dir)
             return
 
@@ -265,11 +268,16 @@ class MainApp:
             self.logger.info("保存分析结果（含单体系详细结果与汇总）...")
             ResultSaver.save_results(actual_output_dir, analysis_results, incremental=is_incremental)
             
+            # 加载采样帧信息
+            path_manager.load_sampled_frames_from_csv()
+            
             # 执行相关性分析
             self._run_correlation_analysis(actual_output_dir)
         elif len(path_manager.get_targets_by_status("completed")) > 0:
             # 没有新的分析结果，但有已完成的系统
             self.logger.info("所有系统均已完成分析，跳过结果保存")
+            # 加载采样帧信息
+            path_manager.load_sampled_frames_from_csv()
             # 仍然执行相关性分析
             self._run_correlation_analysis(actual_output_dir)
         

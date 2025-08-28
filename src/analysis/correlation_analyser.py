@@ -118,7 +118,7 @@ class CorrelationAnalyser:
                 and self.logger.name != "CorrelationAnalyser"
             ):
                 # 使用外部logger时，添加文件记录到analysis_results目录
-                analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
+                analysis_results_dir = os.path.join(FileUtils.get_project_root(), "analysis_results")
                 os.makedirs(analysis_results_dir, exist_ok=True)
                 log_file = os.path.join(
                     analysis_results_dir, "correlation_analysis.log"
@@ -827,7 +827,7 @@ def main():
         logger = None  # 仅使用默认控制台日志
     else:
         # 使用新的集中式日志管理器
-        analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
+        analysis_results_dir = os.path.join(FileUtils.get_project_root(), "analysis_results")
         logger = LoggerManager.create_analysis_logger(
             name="CorrelationAnalyser",
             output_dir=analysis_results_dir,

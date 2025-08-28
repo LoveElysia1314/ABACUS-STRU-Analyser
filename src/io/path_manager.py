@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List
 
+from ..utils.file_utils import FileUtils
+
 
 @dataclass
 class AnalysisTarget:
@@ -20,6 +22,11 @@ class AnalysisTarget:
     creation_time: float
     status: str = "pending"
     source_hash: str = ""  # 源文件哈希，用于检测源数据变更
+    sampled_frames: List[int] = None  # 采样帧编号列表
+
+    def __post_init__(self):
+        if self.sampled_frames is None:
+            self.sampled_frames = []
 
     @property
     def system_name(self) -> str:
@@ -31,7 +38,9 @@ class AnalysisTarget:
 
 
 class PathManager:
-    def __init__(self, output_dir: str = "analysis_results"):
+    def __init__(self, output_dir: str = None):
+        if output_dir is None:
+            output_dir = os.path.join(FileUtils.get_project_root(), "analysis_results")
         self.base_output_dir = output_dir
         self.output_dir = output_dir  # 将在 set_output_dir_for_params 中更新
         self.targets_file = None  # 将在 set_output_dir_for_params 中设置
@@ -416,11 +425,17 @@ class PathManager:
 
                 for target in targets:
                     # 简化输出：移除每个系统的 params_hash，只在 metadata 保存一次
+                    # 将sampled_frames转换为紧凑格式，避免多行显示
+                    sampled_frames_compact = None
+                    if target.sampled_frames:
+                        sampled_frames_compact = json.dumps(target.sampled_frames, separators=(',', ':'))
+
                     system_data = {
                         "system_path": target.system_path,
                         "stru_files_count": len(target.stru_files),
                         "status": target.status,
                         "source_hash": target.source_hash,
+                        "sampled_frames": sampled_frames_compact,
                     }
                     mol_data["systems"][target.system_name] = system_data
 
@@ -479,17 +494,49 @@ class PathManager:
             # 加载分子和系统数据
             for mol_id, mol_data in analysis_data["molecules"].items():
                 targets_for_mol = []
-                for _system_name, system_data in mol_data["systems"].items():
-                    # 兼容性：若 JSON 中缺失 mol_id/conf/temperature/creation_time，使用安全默认值
+                for system_name, system_data in mol_data["systems"].items():
+                    # 从system_name解析mol_id、conf、temperature
+                    # 格式: struct_mol_{mol_id}_conf_{conf}_T{temperature}K
+                    try:
+                        parts = system_name.split('_')
+                        if len(parts) >= 6 and parts[0] == 'struct' and parts[1] == 'mol' and parts[3] == 'conf':
+                            parsed_mol_id = parts[2]
+                            parsed_conf = parts[4]
+                            temp_part = parts[5]  # T{temperature}K
+                            if temp_part.startswith('T') and temp_part.endswith('K'):
+                                parsed_temperature = temp_part[1:-1]  # 移除T和K
+                            else:
+                                parsed_temperature = "0"
+                        else:
+                            # 回退到旧的解析方式
+                            parsed_mol_id = system_data.get("mol_id", mol_id)
+                            parsed_conf = system_data.get("conf", "0")
+                            parsed_temperature = system_data.get("temperature", "0")
+                    except Exception:
+                        # 解析失败，使用默认值
+                        parsed_mol_id = system_data.get("mol_id", mol_id)
+                        parsed_conf = system_data.get("conf", "0")
+                        parsed_temperature = system_data.get("temperature", "0")
+
+                    # 兼容性：若 JSON 中缺失某些字段，使用解析出的值或安全默认值
+                    # 处理sampled_frames：可能是字符串格式（紧凑模式）或列表格式
+                    sampled_frames_data = system_data.get("sampled_frames", [])
+                    if isinstance(sampled_frames_data, str):
+                        try:
+                            sampled_frames_data = json.loads(sampled_frames_data)
+                        except (json.JSONDecodeError, TypeError):
+                            sampled_frames_data = []
+
                     target = AnalysisTarget(
                         system_path=system_data.get("system_path", ""),
-                        mol_id=system_data.get("mol_id", mol_id),
-                        conf=system_data.get("conf", "0"),
-                        temperature=system_data.get("temperature", "0"),
+                        mol_id=parsed_mol_id,
+                        conf=parsed_conf,
+                        temperature=parsed_temperature,
                         stru_files=[],  # 将在 load_from_discovery 中重新填充
                         creation_time=system_data.get("creation_time", 0.0),
                         status=system_data.get("status", "pending"),
                         source_hash=system_data.get("source_hash", ""),
+                        sampled_frames=sampled_frames_data,
                     )
                     self.targets.append(target)
                     targets_for_mol.append(target)
@@ -610,3 +657,66 @@ class PathManager:
             )
         if updated_count == 0 and hash_mismatch_count == 0:
             self.logger.info("增量计算: 未发现已完成的分析结果，将进行完整计算")
+
+    def load_sampled_frames_from_csv(self) -> None:
+        """从single_analysis_results中的CSV文件加载采样帧信息"""
+        if not self.output_dir:
+            self.logger.warning("输出目录未设置，无法加载采样帧信息")
+            return
+
+        single_results_dir = os.path.join(self.output_dir, "single_analysis_results")
+        if not os.path.exists(single_results_dir):
+            self.logger.info("single_analysis_results目录不存在，跳过采样帧信息加载")
+            return
+
+        import csv
+
+        loaded_count = 0
+        for target in self.targets:
+            # 从系统路径提取系统名称
+            system_path = target.system_path
+            system_dir_name = os.path.basename(system_path)
+            csv_filename = f"frame_metrics_{system_dir_name}.csv"
+            csv_path = os.path.join(single_results_dir, csv_filename)
+
+            # 如果找不到匹配的CSV文件，尝试使用target的system_name
+            if not os.path.exists(csv_path):
+                csv_filename = f"frame_metrics_{target.system_name}.csv"
+                csv_path = os.path.join(single_results_dir, csv_filename)
+
+            if os.path.exists(csv_path):
+                try:
+                    sampled_frames = []
+                    with open(csv_path, 'r', encoding='utf-8') as f:
+                        # 跳过注释行（以#开头的行）
+                        lines = f.readlines()
+                        data_start = 0
+                        for i, line in enumerate(lines):
+                            if not line.strip().startswith('#'):
+                                data_start = i
+                                break
+
+                        # 读取CSV数据
+                        csv_content = ''.join(lines[data_start:])
+                        reader = csv.DictReader(csv_content.splitlines())
+
+                        for row in reader:
+                            frame_id = int(row['Frame_ID'])
+                            selected = int(row['Selected'])
+                            if selected == 1:
+                                sampled_frames.append(frame_id)
+
+                    # 更新目标的采样帧信息
+                    target.sampled_frames = sampled_frames
+                    loaded_count += 1
+                    self.logger.debug(f"加载采样帧信息: {target.system_name} ({len(sampled_frames)} 帧)")
+
+                except Exception as e:
+                    self.logger.warning(f"读取采样帧信息失败 {target.system_name}: {str(e)}")
+            else:
+                self.logger.debug(f"采样帧CSV文件不存在: {csv_path}")
+
+        if loaded_count > 0:
+            self.logger.info(f"成功加载 {loaded_count} 个系统的采样帧信息")
+        else:
+            self.logger.info("未找到任何采样帧信息文件")
