@@ -19,57 +19,69 @@ from typing import List, Optional, Tuple, Any
 from src.utils import DirectoryDiscovery
 from src.logging import LoggerManager, create_standard_logger
 from src.io.path_manager import PathManager
-from src.core.system_analyzer import SystemAnalyzer, BatchAnalyzer
+from src.core.system_analyser import SystemAnalyser, BatchAnalyser
 from src.io.result_saver import ResultSaver
 from src.utils.data_utils import ErrorHandler
 
 try:
-    from src.analysis.correlation_analyzer import CorrelationAnalyzer as ExternalCorrelationAnalyzer
-    CORRELATION_ANALYZER_AVAILABLE = True
+    from src.analysis.correlation_analyser import CorrelationAnalyser as ExternalCorrelationAnalyser
+    CORRELATION_ANALYSER_AVAILABLE = True
 except ImportError:
-    CORRELATION_ANALYZER_AVAILABLE = False
+    CORRELATION_ANALYSER_AVAILABLE = False
 
 
-def _worker_analyze_system(system_path: str, sample_ratio: float, power_p: float, pca_variance_ratio: float):
+def _worker_analyse_system(system_path: str, sample_ratio: float, power_p: float, pca_variance_ratio: float):
     """Top-level worker function for multiprocessing.
 
-    Creates a local SystemAnalyzer in the child process to avoid pickling
-    the parent-process analyzer instance.
+    Creates a local SystemAnalyser in the child process to avoid pickling
+    the parent-process analyser instance.
     """
-    analyzer = SystemAnalyzer(
+    analyser = SystemAnalyser(
         include_hydrogen=False,
         sample_ratio=sample_ratio,
         power_p=power_p,
         pca_variance_ratio=pca_variance_ratio
     )
-    return analyzer.analyze_system(system_path)
+    return analyser.analyse_system(system_path)
 
 
-# Globals used when initializing analyzers inside worker processes
-_GLOBAL_ANALYZER = None
+# Globals used when initializing analysers inside worker processes
+_GLOBAL_ANALYSER = None
 
 
-def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float):
-    """Initializer for worker processes: create one SystemAnalyzer per process."""
-    global _GLOBAL_ANALYZER
-    _GLOBAL_ANALYZER = SystemAnalyzer(
+def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float, log_queue: mp.Queue = None):
+    """Initializer for worker processes: create one SystemAnalyser per process and setup logging."""
+    global _GLOBAL_ANALYSER
+
+    # Create analyser
+    _GLOBAL_ANALYSER = SystemAnalyser(
         include_hydrogen=False,
         sample_ratio=sample_ratio,
         power_p=power_p,
         pca_variance_ratio=pca_variance_ratio
     )
+
+    # Setup multiprocess logging for worker
+    if log_queue is not None:
+        from src.logging import LoggerManager
+        worker_logger = LoggerManager.setup_worker_logger(
+            name="WorkerProcess",
+            queue=log_queue,
+            level=logging.INFO,
+            add_console=False  # Workers don't need console output
+        )
 
 
 def _child_worker(system_path: str):
-    """Worker that uses the per-process analyzer set by _child_init.
+    """Worker that uses the per-process analyser set by _child_init.
 
-    Returns the same tuple result as SystemAnalyzer.analyze_system.
+    Returns the same tuple result as SystemAnalyser.analyse_system.
     """
-    global _GLOBAL_ANALYZER
-    if _GLOBAL_ANALYZER is None:
-        # Fallback: construct a temporary analyzer (shouldn't happen when Pool initializer used)
-        return _worker_analyze_system(system_path, 0.05, 0.5, 0.90)
-    return _GLOBAL_ANALYZER.analyze_system(system_path)
+    global _GLOBAL_ANALYSER
+    if _GLOBAL_ANALYSER is None:
+        # Fallback: construct a temporary analyser (shouldn't happen when Pool initializer used)
+        return _worker_analyse_system(system_path, 0.05, 0.5, 0.90)
+    return _GLOBAL_ANALYSER.analyse_system(system_path)
 
 
 class MainApp:
@@ -85,27 +97,70 @@ class MainApp:
         # 解析命令行参数
         args = self._parse_arguments()
         
-        # 配置日志 - 使用时间戳避免覆盖
+        # 配置多进程安全日志系统
         analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
         os.makedirs(analysis_results_dir, exist_ok=True)
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        log_filename = f"main_analysis_{timestamp}.log"
-        log_file_path = os.path.join(analysis_results_dir, log_filename)
-        self.logger = create_standard_logger(__name__, logging.INFO, log_file_path)
-        
-        # 设置工作进程数
-        workers = self._determine_workers(args.workers)
-        
-        # 记录启动信息
-        search_paths = self._resolve_search_paths(args.search_path)
-        search_info = f"搜索路径: {search_paths if search_paths else '(当前目录的父目录)'}"
-        self.logger.info(f"ABACUS主分析器启动 | 采样比例: {args.sample_ratio} | 工作进程: {workers}")
-        self.logger.info(search_info)
-        self.logger.info(f"项目目录屏蔽: {'关闭' if args.include_project else '开启'}")
-        self.logger.info(f"强制重新计算: {'是' if args.force_recompute else '否'}")
-        self.logger.info(f"日志文件: analysis_results/{log_filename}")
-        
+
+        # 创建多进程日志队列和监听器
+        self.log_queue, self.log_listener = LoggerManager.create_multiprocess_logging_setup(
+            output_dir=analysis_results_dir,
+            log_filename="main.log",
+            when="D",  # 按天轮转
+            backup_count=14  # 保留14份备份
+        )
+
+        # 启动日志监听器
+        self.log_listener.start()
+
+        try:
+            # 创建主进程日志器
+            self.logger = LoggerManager.setup_worker_logger(
+                name=__name__,
+                queue=self.log_queue,
+                level=logging.INFO,
+                add_console=True  # 主进程保留控制台输出
+            )
+
+            # 设置工作进程数
+            workers = self._determine_workers(args.workers)
+
+            # 记录启动信息
+            search_paths = self._resolve_search_paths(args.search_path)
+            search_info = f"搜索路径: {search_paths if search_paths else '(当前目录的父目录)'}"
+            self.logger.info(f"ABACUS主分析器启动 | 采样比例: {args.sample_ratio} | 工作进程: {workers}")
+            self.logger.info(search_info)
+            self.logger.info(f"项目目录屏蔽: {'关闭' if args.include_project else '开启'}")
+            self.logger.info(f"强制重新计算: {'是' if args.force_recompute else '否'}")
+            self.logger.info(f"日志文件: analysis_results/main.log (多进程安全，自动轮转)")
+            
+            # 执行主要分析流程
+            self._execute_analysis_workflow(args, start_time)
+            
+        except Exception as e:
+            # 记录主程序异常
+            if hasattr(self, 'logger') and self.logger:
+                self.logger.error(f"主程序执行出错: {str(e)}")
+                import traceback
+                self.logger.error(f"详细错误信息: {traceback.format_exc()}")
+            else:
+                # 如果日志器还没创建，使用print
+                print(f"主程序执行出错: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+        finally:
+            # 确保日志监听器被正确停止
+            if hasattr(self, 'log_listener') and self.log_listener:
+                try:
+                    LoggerManager.stop_listener(self.log_listener)
+                    if hasattr(self, 'logger') and self.logger:
+                        self.logger.info("日志监听器已停止")
+                except Exception as e:
+                    print(f"停止日志监听器时出错: {str(e)}")
+
+    def _execute_analysis_workflow(self, args, start_time):
+        """执行主要的分析工作流程"""
         # 步骤1: 查找和管理系统目录
+        search_paths = self._resolve_search_paths(args.search_path)
         mol_systems = self._discover_systems_from_paths(search_paths, args.include_project)
         if not mol_systems:
             self.logger.error("未找到符合格式的系统目录")
@@ -113,7 +168,6 @@ class MainApp:
         
         # 步骤2: 配置参数专用输出目录
         self.logger.info("配置分析参数专用目录...")
-    # include_h 固定为 False，移除可选参数
         current_analysis_params = {
             'sample_ratio': args.sample_ratio,
             'power_p': args.power_p,
@@ -170,9 +224,12 @@ class MainApp:
         final_targets = len(path_manager.targets)
         self.logger.info(f"发现 {total_molecules} 个分子，共 {total_systems} 个体系，去重后 {final_targets} 个目标")
         
-        # 步骤3: 创建分析器并执行分析
+        # 设置工作进程数
+        workers = self._determine_workers(args.workers)
+        
+        # 步骤4: 创建分析器并执行分析
         self.logger.info("创建系统分析器...")
-        analyzer = SystemAnalyzer(
+        analyser = SystemAnalyser(
             include_hydrogen=False,
             sample_ratio=args.sample_ratio,
             power_p=args.power_p,
@@ -188,12 +245,12 @@ class MainApp:
         # 执行分析
         if workers > 1:
             self.logger.info(f"使用并行分析模式（{workers} 个工作进程）...")
-            analysis_results = self._parallel_analysis(analyzer, system_paths, path_manager, workers)
+            analysis_results = self._parallel_analysis(analyser, system_paths, path_manager, workers)
         else:
             self.logger.info("使用顺序分析模式...")
-            analysis_results = self._sequential_analysis(analyzer, system_paths, path_manager)
+            analysis_results = self._sequential_analysis(analyser, system_paths, path_manager)
         
-        # 步骤4: 保存结果
+        # 步骤5: 保存结果
         if analysis_results:
             self.logger.info("保存分析结果...")
             
@@ -216,7 +273,7 @@ class MainApp:
             # 仍然执行相关性分析
             self._run_correlation_analysis(actual_output_dir)
         
-        # 步骤5: 保存最终状态并输出统计
+        # 步骤6: 保存最终状态并输出统计
         self.logger.info("保存分析目标状态...")
         try:
             path_manager.save_analysis_targets(current_analysis_params)
@@ -311,13 +368,13 @@ class MainApp:
         
         return all_mol_systems
     
-    def _parallel_analysis(self, analyzer: SystemAnalyzer, system_paths: List[str], 
+    def _parallel_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
                           path_manager: PathManager, workers: int) -> List[tuple]:
         """并行分析系统"""
         analysis_results = []
-        # Use a Pool initializer to create one SystemAnalyzer per worker process and
+        # Use a Pool initializer to create one SystemAnalyser per worker process and
         # use imap_unordered with a calculated chunksize for better throughput.
-        initializer_args = (analyzer.sample_ratio, analyzer.power_p, analyzer.pca_variance_ratio)
+        initializer_args = (analyser.sample_ratio, analyser.power_p, analyser.pca_variance_ratio, self.log_queue)
         chunksize = max(1, len(system_paths) // (workers * 4)) if system_paths else 1
 
         with mp.Pool(processes=workers, initializer=_child_init, initargs=initializer_args) as pool:
@@ -352,7 +409,7 @@ class MainApp:
                 )
         return analysis_results
     
-    def _sequential_analysis(self, analyzer: SystemAnalyzer, system_paths: List[str], 
+    def _sequential_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
                            path_manager: PathManager) -> List[tuple]:
         """顺序分析系统"""
         analysis_results = []
@@ -361,7 +418,7 @@ class MainApp:
             try:
                 path_manager.update_target_status(system_path, "processing")
                 
-                result = analyzer.analyze_system(system_path)
+                result = analyser.analyse_system(system_path)
                 if result:
                     analysis_results.append(result)
                     path_manager.update_target_status(system_path, "completed")
@@ -386,16 +443,28 @@ class MainApp:
         """运行相关性分析"""
         combined_csv_path = os.path.join(output_dir, "combined_analysis_results", "system_metrics_summary.csv")
         combined_output_dir = os.path.join(output_dir, "combined_analysis_results")
-        
-        if CORRELATION_ANALYZER_AVAILABLE and os.path.exists(combined_csv_path):
+
+        if CORRELATION_ANALYSER_AVAILABLE and os.path.exists(combined_csv_path):
+            analyser = None
             try:
-                analyzer = ExternalCorrelationAnalyzer(logger=self.logger)
-                analyzer.analyze_correlations(combined_csv_path, combined_output_dir)
+                analyser = ExternalCorrelationAnalyser(logger=self.logger)
+                analyser.analyse_correlations(combined_csv_path, combined_output_dir)
                 self.logger.info("相关性分析完成")
             except Exception as e:
                 self.logger.error(f"相关性分析失败: {str(e)}")
+                import traceback
+                self.logger.error(f"详细错误信息: {traceback.format_exc()}")
+            finally:
+                # 确保分析器资源被正确清理
+                if analyser:
+                    # 如果分析器有清理方法，调用它
+                    if hasattr(analyser, 'cleanup'):
+                        try:
+                            analyser.cleanup()
+                        except Exception as cleanup_error:
+                            self.logger.warning(f"清理相关性分析器时出错: {str(cleanup_error)}")
         else:
-            if not CORRELATION_ANALYZER_AVAILABLE:
+            if not CORRELATION_ANALYSER_AVAILABLE:
                 self.logger.warning("相关性分析模块不可用，跳过相关性分析")
             else:
                 self.logger.warning(f"系统指标文件不存在，跳过相关性分析: {combined_csv_path}")
@@ -424,7 +493,7 @@ class MainApp:
         self.logger.info(f"总耗时: {elapsed:.1f}s ({elapsed/60:.1f} 分钟)")
         self.logger.info(f"结果目录: {output_dir}")
         self.logger.info(f"路径信息: {path_manager.targets_file}")
-        self.logger.info(f"日志文件: analysis_results/main_analysis.log")
+        self.logger.info(f"日志文件: analysis_results/main.log (多进程安全，自动轮转)")
         self.logger.info("=" * 60)
 
 

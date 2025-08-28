@@ -162,7 +162,7 @@ class SamplingStrategy:
 
 
 class GreedyMaxDistanceSampler:
-    """贪婪最大距离采样器（从trajectory_analyzer迁移）"""
+    """贪婪最大距离采样器（从trajectory_analyser迁移）"""
 
     @staticmethod
     def select_frames(

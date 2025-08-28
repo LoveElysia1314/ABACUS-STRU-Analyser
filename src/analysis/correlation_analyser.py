@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-脚本名: correlation_analyzer.py
+脚本名: correlation_analyser.py
 功能: ABACUS STRU 轨迹分析相关性分析器
 ==================================================
 
@@ -60,7 +60,7 @@ from ..utils import (
 )
 
 
-class CorrelationAnalyzer:
+class CorrelationAnalyser:
     """相关性分析器类"""
 
     def __init__(self, logger: Optional[logging.Logger] = None):
@@ -85,7 +85,7 @@ class CorrelationAnalyzer:
     def _create_default_logger(self) -> logging.Logger:
         """创建默认日志记录器"""
         return LoggerManager.create_logger(
-            name="CorrelationAnalyzer",
+            name="CorrelationAnalyser",
             level=logging.INFO,
             add_console=True,
             log_format=Constants.DEFAULT_LOG_FORMAT,
@@ -96,7 +96,7 @@ class CorrelationAnalyzer:
         """将序列中的numpy类型转为Python原生类型"""
         return DataUtils.to_python_types(seq)
 
-    def analyze_correlations(self, csv_file_path: str, output_dir: str) -> bool:
+    def analyse_correlations(self, csv_file_path: str, output_dir: str) -> bool:
         """
         分析初始构象、温度与各指标的相关性
 
@@ -115,7 +115,7 @@ class CorrelationAnalyzer:
             file_handler = None
             if (
                 hasattr(self.logger, "name")
-                and self.logger.name != "CorrelationAnalyzer"
+                and self.logger.name != "CorrelationAnalyser"
             ):
                 # 使用外部logger时，添加文件记录到analysis_results目录
                 analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
@@ -168,8 +168,8 @@ class CorrelationAnalyzer:
             os.makedirs(output_dir, exist_ok=True)
 
             # 执行全局分析（移除分子级分析）
-            global_temp_results = self._analyze_global_temperature_correlations(df)
-            global_config_results = self._analyze_global_configuration_effects(df)
+            global_temp_results = self._analyse_global_temperature_correlations(df)
+            global_config_results = self._analyse_global_configuration_effects(df)
 
             # 保存结果（传入空列表替代分子级结果）
             self._save_results(
@@ -198,7 +198,7 @@ class CorrelationAnalyzer:
 
             return False
 
-    def _analyze_global_temperature_correlations(self, df: pd.DataFrame) -> List[Dict]:
+    def _analyse_global_temperature_correlations(self, df: pd.DataFrame) -> List[Dict]:
         """分析温度相关性（按单变量控制原则：固定分子和构象，分析温度效应）"""
         global_temp_results = []
 
@@ -266,12 +266,26 @@ class CorrelationAnalyzer:
                 continue
 
             # Pearson相关系数（线性相关）
-            pearson_r, pearson_p = stats.pearsonr(all_temps, all_values)
+            try:
+                pearson_r, pearson_p = stats.pearsonr(all_temps, all_values)
+                if np.isnan(pearson_r) or np.isnan(pearson_p):
+                    self.logger.warning(f"指标 '{indicator}' 的Pearson相关系数计算结果无效，跳过")
+                    continue
+            except Exception as e:
+                self.logger.warning(f"指标 '{indicator}' 的Pearson相关系数计算失败: {str(e)}，跳过")
+                continue
+
             # Spearman相关系数（秩相关）
-            spearman_r, spearman_p = stats.spearmanr(all_temps, all_values)
+            try:
+                spearman_r, spearman_p = stats.spearmanr(all_temps, all_values)
+                if np.isnan(spearman_r) or np.isnan(spearman_p):
+                    self.logger.warning(f"指标 '{indicator}' 的Spearman相关系数计算结果无效，跳过")
+                    continue
+            except Exception as e:
+                self.logger.warning(f"指标 '{indicator}' 的Spearman相关系数计算失败: {str(e)}，跳过")
+                continue
 
             significance = "Yes" if pearson_p < 0.05 else "No"
-            self._get_correlation_strength(abs(pearson_r))
 
             global_temp_results.append(
                 {
@@ -294,7 +308,7 @@ class CorrelationAnalyzer:
 
         return global_temp_results
 
-    def _analyze_global_configuration_effects(self, df: pd.DataFrame) -> List[Dict]:
+    def _analyse_global_configuration_effects(self, df: pd.DataFrame) -> List[Dict]:
         """分析构象效应（按单变量控制原则：固定分子和温度，分析构象效应）"""
         global_config_results = []
 
@@ -383,13 +397,33 @@ class CorrelationAnalyzer:
             if not ValidationUtils.validate_sample_size(groups, min_size=2):
                 continue
 
-            # 检查每组的样本量，每组至少需要1个样本才能进行ANOVA
-            valid_groups_for_anova = [group for group in groups if len(group) >= 1]
+            # 检查每组的样本量，每组至少需要2个样本才能进行ANOVA（计算方差）
+            valid_groups_for_anova = [group for group in groups if len(group) >= 2]
             if len(valid_groups_for_anova) < 2:
+                self.logger.warning(f"指标 '{indicator}' 的有效组不足2个（每组需要至少2个样本），跳过构象效应分析")
                 continue
 
+            # 记录哪些构象组被过滤掉
+            filtered_configs = []
+            for i, config in enumerate(config_labels):
+                if i >= len(groups) or len(groups[i]) < 2:
+                    filtered_configs.append(config)
+
+            if filtered_configs:
+                self.logger.info(f"过滤的构象组（样本量不足）: {filtered_configs}")
+
             # 执行单因素方差分析
-            f_stat, p_value = stats.f_oneway(*valid_groups_for_anova)
+            try:
+                f_stat, p_value = stats.f_oneway(*valid_groups_for_anova)
+
+                # 检查结果是否有效
+                if np.isnan(f_stat) or np.isnan(p_value):
+                    self.logger.warning(f"指标 '{indicator}' 的方差分析结果无效，跳过")
+                    continue
+
+            except Exception as e:
+                self.logger.warning(f"指标 '{indicator}' 的方差分析执行失败: {str(e)}，跳过")
+                continue
 
             # 计算Eta平方（效应量）
             all_values = np.concatenate(valid_groups_for_anova)
@@ -404,15 +438,20 @@ class CorrelationAnalyzer:
             eta_squared = DataUtils.safe_divide(ss_between, ss_total, default=0.0)
 
             significance = "Yes" if p_value < 0.05 else "No"
-            self._get_effect_size_interpretation(eta_squared)
+
+            # 更新有效的构象标签（只包含有足够样本的组）
+            valid_config_labels = []
+            for i, config in enumerate(config_labels):
+                if i < len(groups) and len(groups[i]) >= 2:
+                    valid_config_labels.append(config)
 
             # 计算各组的描述性统计
             group_stats = {}
-            for i, config in enumerate(config_labels):
+            for i, config in enumerate(valid_config_labels):
                 if i < len(valid_groups_for_anova):
                     group_data = valid_groups_for_anova[i]
                     group_stats[f"Config_{config}_mean"] = np.mean(group_data)
-                    group_stats[f"Config_{config}_std"] = np.std(group_data)
+                    group_stats[f"Config_{config}_std"] = np.std(group_data, ddof=1) if len(group_data) > 1 else 0.0
                     group_stats[f"Config_{config}_n"] = len(group_data)
 
             global_config_results.append(
@@ -425,7 +464,7 @@ class CorrelationAnalyzer:
                     "Filtered_Systems": total_filtered_samples,
                     "Valid_Groups": len(valid_groups),
                     "Filtered_Groups": len(filtered_groups),
-                    "Configurations": sorted(config_labels),
+                    "Configurations": valid_config_labels,
                     "F_statistic": f_stat,
                     "P_value": p_value,
                     "Eta_squared": eta_squared,
@@ -465,72 +504,126 @@ class CorrelationAnalyzer:
         global_config_results: List[Dict],
         output_dir: str,
     ) -> None:
-        """保存分析结果到统一的CSV文件（整合详细和汇总信息）"""
+        """保存分析结果到统一的CSV文件（结构化、去冗余的输出）
+
+        输出列（规范）：
+        Analysis_Type, Indicator, Statistic, P_Value, Effect_Size, Significance, Eval,
+        Valid_Samples, Total_Systems, Valid_Groups, Filtered_Systems, Spearman_r,
+        Temp_Range, Configs, Notes
+        """
         main_csv_path = os.path.join(output_dir, "parameter_analysis_results.csv")
         main_data = []
 
-        # 保存单变量控制温度相关性结果
+        # 温度相关性（每行代表一个指标）
         for result in global_temp_results:
+            r_val = result.get("Pearson_r")
+            p_val = result.get("Pearson_p")
+            sample_size = result.get("Sample_Size")
+            total = result.get("Total_Systems")
+            valid_groups = result.get("Valid_Groups")
+            filtered_systems = result.get("Filtered_Systems")
+            spearman = result.get("Spearman_r")
+            temp_range = result.get("Temperature_Range")
+
+            # 生成可读评价（Eval）并确定显著性（由数值决定）
+            eval_text = self._get_temperature_correlation_evaluation(
+                r_val if r_val is not None else float("nan"),
+                p_val if p_val is not None else float("nan"),
+            )
+
+            notes = []
+            # 兼容可能的逻辑冲突（CSV 中原先写的 Interpretation）
+            if "Interpretation" in result and result.get("Interpretation"):
+                notes.append(f"orig_interp={result.get('Interpretation')}")
+
             main_data.append(
                 [
                     "Temp_Corr",
-                    result["Indicator"],
-                    DataUtils.format_number(result["Pearson_r"]),  # Statistic_Value
-                    DataUtils.format_number(result["Pearson_p"]),  # P_Value
-                    DataUtils.format_number(abs(result["Pearson_r"])),  # Effect_Size
-                    result["Significance"],
-                    self._get_correlation_strength(abs(result["Pearson_r"])),  # Interpretation
-                    f"{result['Sample_Size']}/{result['Total_Systems']}",  # Valid_Samples
-                    f"r={result['Pearson_r']:.3f}, p={result['Pearson_p']:.3f}",  # Statistic_Info
-                    f"Valid_Groups:{result['Valid_Groups']}, Filtered_Groups:{result['Filtered_Groups']}",  # Group_Info
-                    f"Filtered_Systems:{result['Filtered_Systems']}; Spearman_r={result['Spearman_r']:.3f}; Range={result['Temperature_Range']}",  # Additional_Details
+                    result.get("Indicator"),
+                    DataUtils.format_number(r_val),
+                    DataUtils.format_number(p_val),
+                    DataUtils.format_number(abs(r_val) if r_val is not None else None),
+                    "Yes" if (p_val is not None and not np.isnan(p_val) and p_val < 0.05) else "No",
+                    eval_text,
+                    int(sample_size) if sample_size is not None else None,
+                    int(total) if total is not None else None,
+                    int(valid_groups) if valid_groups is not None else None,
+                    int(filtered_systems) if filtered_systems is not None else None,
+                    DataUtils.format_number(spearman),
+                    temp_range,
+                    None,
+                    "; ".join(notes) if notes else None,
                 ]
             )
 
-        # 保存单变量控制构象效应结果
+        # 构象效应（ANOVA）
         for result in global_config_results:
-            configs_str = ",".join(map(str, result["Configurations"]))
-            # 构建各组样本量信息
-            group_sample_info = []
-            for config in result["Configurations"]:
-                if f"Config_{config}_n" in result:
-                    group_sample_info.append(
-                        f"Config{config}:{result[f'Config_{config}_n']}"
-                    )
-            group_sample_str = ",".join(group_sample_info)
+            f_stat = result.get("F_statistic")
+            p_val = result.get("P_value")
+            eta_sq = result.get("Eta_squared")
+            sample_size = result.get("Sample_Size")
+            total = result.get("Total_Systems")
+            valid_groups = result.get("Valid_Groups")
+            filtered_systems = result.get("Filtered_Systems")
+            configs = result.get("Configurations")
+
+            notes = []
+            if p_val is None or (isinstance(p_val, float) and np.isnan(p_val)):
+                notes.append("ANOVA not computable: insufficient groups/data")
+
+            eval_text = self._get_configuration_effect_evaluation(
+                eta_sq if eta_sq is not None else float("nan"),
+                p_val if p_val is not None else float("nan"),
+            )
+
+            # 将 configs 序列化为字符串以便 CSV 存储
+            configs_str = None
+            if configs is not None:
+                try:
+                    configs_str = ",".join(map(str, configs))
+                except Exception:
+                    configs_str = str(configs)
 
             main_data.append(
                 [
                     "Config_Effect",
-                    result["Indicator"],
-                    DataUtils.format_number(result["F_statistic"]),  # Statistic_Value
-                    DataUtils.format_number(result["P_value"]),  # P_Value
-                    DataUtils.format_number(result["Eta_squared"]),  # Effect_Size
-                    result["Significance"],
-                    self._get_effect_size_interpretation(result["Eta_squared"]),  # Interpretation
-                    f"{result['Sample_Size']}/{result['Total_Systems']}",  # Valid_Samples
-                    f"F={result['F_statistic']:.3f}, p={result['P_value']:.3f}, η²={result['Eta_squared']:.3f}",  # Statistic_Info
-                    f"Valid_Groups:{result['Valid_Groups']}, Filtered_Groups:{result['Filtered_Groups']}; Configs=[{configs_str}]; Groups:[{group_sample_str}]",  # Group_Info
-                    f"Filtered_Systems:{result['Filtered_Systems']}",  # Additional_Details
+                    result.get("Indicator"),
+                    DataUtils.format_number(f_stat),
+                    DataUtils.format_number(p_val),
+                    DataUtils.format_number(eta_sq),
+                    "Yes" if (p_val is not None and not np.isnan(p_val) and p_val < 0.05) else "No",
+                    eval_text,
+                    int(sample_size) if sample_size is not None else None,
+                    int(total) if total is not None else None,
+                    int(valid_groups) if valid_groups is not None else None,
+                    int(filtered_systems) if filtered_systems is not None else None,
+                    None,
+                    None,
+                    configs_str,
+                    "; ".join(notes) if notes else None,
                 ]
             )
 
-        # 写入统一结果文件
+        # 写入结构化CSV
         FileUtils.safe_write_csv(
             main_csv_path,
             main_data,
             headers=[
                 "Analysis_Type",
                 "Indicator",
-                "Statistic_Value",
+                "Statistic",
                 "P_Value",
                 "Effect_Size",
                 "Significance",
-                "Interpretation",
+                "Eval",
                 "Valid_Samples",
-                "Statistic_Info",
-                "Group_Info",
-                "Additional_Details",
+                "Total_Systems",
+                "Valid_Groups",
+                "Filtered_Systems",
+                "Spearman_r",
+                "Temp_Range",
+                "Configs",
+                "Notes",
             ],
             encoding="utf-8-sig",
         )
@@ -543,135 +636,117 @@ class CorrelationAnalyzer:
         global_config_results: List[Dict],
     ) -> None:
         """输出分析总结"""
-        self.logger.info("=" * 50)
-        self.logger.info("相关性分析总结:")
+        self.logger.info("=" * 60)
+        self.logger.info("相关性分析总结")
+        self.logger.info("=" * 60)
 
-        # 数据概览信息（使用新的单变量控制数据）
+        # 数据概览信息（合并避免重复）
+        if global_temp_results or global_config_results:
+            # 从任一结果中提取基本信息
+            source_result = global_temp_results[0] if global_temp_results else global_config_results[0]
+            total_samples = source_result["Total_Systems"]
+
+            self.logger.info(f"数据概览:")
+            self.logger.info(f"   总体系数: {total_samples}")
+
+            if global_temp_results:
+                first_temp = global_temp_results[0]
+                valid_samples_temp = first_temp["Sample_Size"]
+                filtered_samples_temp = first_temp["Filtered_Systems"]
+                valid_groups_temp = first_temp["Valid_Groups"]
+                temp_range = first_temp["Temperature_Range"]
+                self.logger.info(f"   温度分析: {valid_samples_temp}/{total_samples}有效样本 (过滤{filtered_samples_temp})")
+                self.logger.info(f"   温度范围: {temp_range}")
+
+            if global_config_results:
+                first_config = global_config_results[0]
+                valid_samples_config = first_config["Sample_Size"]
+                filtered_samples_config = first_config["Filtered_Systems"]
+                valid_groups_config = first_config["Valid_Groups"]
+                configs = first_config["Configurations"]
+                self.logger.info(f"   构象分析: {valid_samples_config}/{total_samples}有效样本 (过滤{filtered_samples_config})")
+                self.logger.info(f"   构象类型: {self._to_python_list(sorted(configs))}")
+
+        # 温度相关性分析结果
         if global_temp_results:
-            first_temp_result = global_temp_results[0]
-            total_samples = first_temp_result["Total_Systems"]
-            valid_samples_temp = first_temp_result["Sample_Size"]
-            filtered_samples_temp = first_temp_result["Filtered_Systems"]
-            valid_groups_temp = first_temp_result["Valid_Groups"]
-            filtered_groups_temp = first_temp_result["Filtered_Groups"]
-            temp_range = first_temp_result["Temperature_Range"]
-
-            self.logger.info(f"数据概览: 总计{total_samples}个体系")
-            self.logger.info(
-                f"  温度分析有效样本: {valid_samples_temp}/{total_samples} (过滤{filtered_samples_temp}个)"
-            )
-            self.logger.info(
-                f"  温度分析有效组: {valid_groups_temp}个(分子,构象)组 (过滤{filtered_groups_temp}个)"
-            )
-            self.logger.info(f"  温度范围: {temp_range}")
-
-        if global_config_results:
-            first_config_result = global_config_results[0]
-            total_samples = first_config_result["Total_Systems"]
-            valid_samples_config = first_config_result["Sample_Size"]
-            filtered_samples_config = first_config_result["Filtered_Systems"]
-            valid_groups_config = first_config_result["Valid_Groups"]
-            filtered_groups_config = first_config_result["Filtered_Groups"]
-            configs = first_config_result["Configurations"]
-
-            self.logger.info(
-                f"  构象分析有效样本: {valid_samples_config}/{total_samples} (过滤{filtered_samples_config}个)"
-            )
-            self.logger.info(
-                f"  构象分析有效组: {valid_groups_config}个(分子,温度)组 (过滤{filtered_groups_config}个)"
-            )
-            self.logger.info(f"  构象类型: {self._to_python_list(sorted(configs))}")
-
-        # 单变量控制温度相关性分析
-        if global_temp_results:
-            significant_global = [
-                r for r in global_temp_results if r["Significance"] == "Yes"
-            ]
-            self.logger.info(
-                f"单变量控制温度相关性: {len(significant_global)}/{len(global_temp_results)}个指标显著相关"
-            )
+            self.logger.info(f"\n温度相关性分析:")
+            significant_count = sum(1 for r in global_temp_results if r["Significance"] == "Yes")
+            self.logger.info(f"   显著相关指标: {significant_count}/{len(global_temp_results)}")
 
             for result in global_temp_results:
-                confidence_level = self._get_confidence_level(result["Pearson_p"])
-                corr_strength = self._get_correlation_strength(abs(result["Pearson_r"]))
-                self.logger.info(
-                    f"  {result['Indicator']}: r={result['Pearson_r']:.3f} (p={result['Pearson_p']:.3f}) - {corr_strength}, {confidence_level}"
-                )
-
-            if significant_global:
-                strongest_global = max(
-                    significant_global, key=lambda x: abs(x["Pearson_r"])
+                evaluation = self._get_temperature_correlation_evaluation(
+                    result["Pearson_r"], result["Pearson_p"]
                 )
                 self.logger.info(
-                    f"  最强相关: {strongest_global['Indicator']} (r={strongest_global['Pearson_r']:.3f})"
+                    f"   {result['Indicator']:<15} r={result['Pearson_r']:.3f} (p={result['Pearson_p']:.3f}) - {evaluation}"
                 )
 
-        # 单变量控制构象效应分析
+        # 构象效应分析结果
         if global_config_results:
-            significant_global_config = [
-                r for r in global_config_results if r["Significance"] == "Yes"
-            ]
-            self.logger.info(
-                f"单变量控制构象效应: {len(significant_global_config)}/{len(global_config_results)}个指标显著"
-            )
+            self.logger.info(f"\n构象效应分析:")
+            significant_count = sum(1 for r in global_config_results if r["Significance"] == "Yes")
+            self.logger.info(f"   显著效应指标: {significant_count}/{len(global_config_results)}")
 
             for result in global_config_results:
-                confidence_level = self._get_confidence_level(result["P_value"])
-                effect_strength = self._get_effect_size_interpretation(
-                    result["Eta_squared"]
-                )
+                # 处理 NaN 值
+                f_stat = result["F_statistic"]
+                p_value = result["P_value"]
+                eta_sq = result["Eta_squared"]
+
+                if np.isnan(f_stat) or np.isnan(p_value):
+                    evaluation = "数据不足，无法计算"
+                    stat_info = "F=nan (p=nan)"
+                else:
+                    evaluation = self._get_configuration_effect_evaluation(eta_sq, p_value)
+                    if p_value < 0.05:
+                        evaluation += f" (η²={eta_sq:.3f})"
+                    stat_info = f"F={f_stat:.3f} (p={p_value:.3f})"
+
                 self.logger.info(
-                    f"  {result['Indicator']}: F={result['F_statistic']:.3f} (p={result['P_value']:.3f}), eta²={result['Eta_squared']:.3f} - {effect_strength}, {confidence_level}"
+                    f"   {result['Indicator']:<15} {stat_info}, η²={eta_sq:.3f} - {evaluation}"
                 )
 
-            if significant_global_config:
-                strongest_config = max(
-                    significant_global_config, key=lambda x: x["Eta_squared"]
-                )
-                self.logger.info(
-                    f"  最强效应: {strongest_config['Indicator']} (eta²={strongest_config['Eta_squared']:.3f})"
-                )
+        self.logger.info("=" * 60)
 
-        self.logger.info("=" * 50)
+    def _get_temperature_correlation_evaluation(self, r: float, p_value: float) -> str:
+        """根据新标准自动评价温度相关性"""
+        if p_value < 0.05:
+            abs_r = abs(r)
+            if abs_r >= 0.5:
+                strength = "强相关"
+            elif abs_r >= 0.3:
+                strength = "中等相关"
+            elif abs_r >= 0.1:
+                strength = "弱相关"
+            else:
+                strength = "极弱相关"
+            confidence = self._get_confidence_level(p_value)
+            return f"{strength}, {confidence}置信"
+        else:
+            return "无相关, 不显著"
+
+    def _get_configuration_effect_evaluation(self, eta_squared: float, p_value: float) -> str:
+        """根据新标准自动评价构象效应"""
+        if p_value < 0.05:
+            if eta_squared >= 0.04:
+                effect_size = "中等效应"
+            elif eta_squared >= 0.01:
+                effect_size = "小效应"
+            else:
+                effect_size = "微弱效应"
+            return f"显著, {effect_size}"
+        else:
+            return "无效应, 不显著"
 
 
 def setup_file_logger(output_dir: str) -> logging.Logger:
     """设置文件日志记录器"""
-    # 日志输出到analysis_results目录
-    analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
-    os.makedirs(analysis_results_dir, exist_ok=True)
-
-    logger = logging.getLogger("CorrelationAnalyzer")
-    logger.setLevel(logging.INFO)
-
-    # 清除现有处理器
-    logger.handlers.clear()
-
-    # 文件处理器 - 使用更合适的日志文件名
-    log_file = os.path.join(analysis_results_dir, "correlation_analysis.log")
-    file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
-
-    # 控制台处理器，强制UTF-8编码
-    try:
-        console_handler = logging.StreamHandler(
-            open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1)
-        )
-    except Exception:
-        # 某些环境下sys.stdout.fileno()不可用，退回默认
-        console_handler = logging.StreamHandler(sys.stdout)
-
-    # 格式设置
-    formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
+    # 使用新的集中式日志管理器
+    return LoggerManager.create_analysis_logger(
+        name="CorrelationAnalyser",
+        output_dir=output_dir,
+        log_filename="correlation_analysis.log"
     )
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    logger.propagate = False
-
-    return logger
 
 
 def find_system_metrics_csv(search_dir: str = ".") -> Optional[str]:
@@ -699,16 +774,16 @@ def main():
         epilog="""
 使用示例:
   # 自动查找当前目录下的system_metrics_summary.csv并分析（默认启用日志文件）
-  python correlation_analyzer.py
+  python correlation_analyser.py
 
   # 指定输入文件
-  python correlation_analyzer.py -i analysis_results/combined_analysis_results/system_metrics_summary.csv
+  python correlation_analyser.py -i analysis_results/combined_analysis_results/system_metrics_summary.csv
 
   # 指定输入文件和输出目录
-  python correlation_analyzer.py -i data.csv -o combined_results
+  python correlation_analyser.py -i data.csv -o combined_results
 
   # 禁用日志文件，仅输出到控制台
-  python correlation_analyzer.py --no-log-file
+  python correlation_analyser.py --no-log-file
         """,
     )
 
@@ -751,19 +826,25 @@ def main():
     if args.no_log_file:
         logger = None  # 仅使用默认控制台日志
     else:
-        logger = setup_file_logger(args.output)
+        # 使用新的集中式日志管理器
+        analysis_results_dir = os.path.join(os.getcwd(), "analysis_results")
+        logger = LoggerManager.create_analysis_logger(
+            name="CorrelationAnalyser",
+            output_dir=analysis_results_dir,
+            log_filename="correlation_analysis.log"
+        )
         # 记录独立运行的日志到analysis_results目录，确保UTF-8编码
         logger.info("已启用文件日志记录 (UTF-8 编码, 输出到 analysis_results 目录)")
 
     # 创建分析器并执行分析
-    analyzer = CorrelationAnalyzer(logger=logger)
+    analyser = CorrelationAnalyser(logger=logger)
 
     print(f"开始分析文件: {csv_file_path}")
     print(f"输出目录: {args.output}")
     if not args.no_log_file:
         print("日志文件: analysis_results/correlation_analysis.log")
 
-    success = analyzer.analyze_correlations(csv_file_path, args.output)
+    success = analyser.analyse_correlations(csv_file_path, args.output)
 
     if success:
         print(f"\n分析完成！结果已保存到: {args.output}")
