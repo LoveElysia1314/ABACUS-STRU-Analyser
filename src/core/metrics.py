@@ -136,10 +136,15 @@ class TrajectoryMetrics:
         self.ANND_sampled = 0.0
         self.MPD_sampled = 0.0
         self.sampled_frames = []
+        # RMSD相关字段
+        self.rmsd_mean = 0.0  # RMSD均值（总体指标）
+        self.rmsd_per_frame = []  # 每帧RMSD（单帧指标）
+        self.rmsd_mean_sampled = 0.0  # 采样后RMSD均值
         # PCA相关字段
         self.pca_variance_ratio = 0.0  # PCA目标方差贡献率
         self.pca_explained_variance_ratio = []  # 各主成分方差贡献率
         self.pca_cumulative_variance_ratio = 0.0  # 累积方差贡献率
+        self.pca_components = 0  # PCA主成分数量
         # 综合向量相关字段
         self.comprehensive_dimension = 0  # 综合向量维度
         self.energy_available = False  # 是否有能量数据
@@ -162,20 +167,5 @@ class TrajectoryMetrics:
         self.MPD_sampled = metrics_data["MPD"]
 
     def get_ratio_metrics(self) -> Dict[str, float]:
-        ratios = {}
-        if self.MinD > Constants.EPSILON:
-            ratios["MinD_ratio"] = self.MinD_sampled / self.MinD
-        else:
-            ratios["MinD_ratio"] = 1.0
-
-        if self.ANND > Constants.EPSILON:
-            ratios["ANND_ratio"] = self.ANND_sampled / self.ANND
-        else:
-            ratios["ANND_ratio"] = 1.0
-
-        if self.MPD > Constants.EPSILON:
-            ratios["MPD_ratio"] = self.MPD_sampled / self.MPD
-        else:
-            ratios["MPD_ratio"] = 1.0
-
-        return ratios
+        """返回空字典，因为已移除所有比率计算"""
+        return {}

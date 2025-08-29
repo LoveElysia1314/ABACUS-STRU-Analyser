@@ -484,7 +484,7 @@ class MainApp:
         progress_summary = path_manager.get_progress_summary()
         
         # 计算采样统计
-        swap_counts = [result[3] for result in analysis_results if len(result) > 3]
+        swap_counts = [result[3] for result in analysis_results]
         
         self.logger.info("=" * 60)
         self.logger.info(f"分析完成! 处理体系: {len(analysis_results)}/{progress_summary['total']}")
