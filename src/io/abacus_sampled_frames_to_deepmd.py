@@ -13,13 +13,11 @@ import dpdata
 from tqdm import tqdm
 import numpy as np
 from pathlib import Path
-# 移除标准库logging导入，避免循环导入
-# import logging
 from src.logging import create_standard_logger
 
 def parse_args():
     parser = argparse.ArgumentParser(description="根据analysis_targets.json采样帧导出deepmd数据集并可拆分")
-    parser.add_argument('--run_dir', type=str, help='分析结果目录，包含analysis_targets.json')
+    parser.add_argument('--run_dir', type=str, default='analysis_results/run_r0.05_p-0.5_v0.9', help='分析结果目录，包含analysis_targets.json')
     parser.add_argument('--output_dir', type=str, default='output_npy', help='输出deepmd npy目录')
     parser.add_argument('--split_ratio', type=float, nargs='+', default=[0.8, 0.2], help='拆分比例，如0.8 0.2')
     return parser.parse_args()
@@ -31,7 +29,6 @@ ALL_TYPE_MAP = [
     "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", 
     "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
 ]
-
 
 def export_sampled_frames_to_deepmd(run_dir, output_dir, split_ratio=None, logger=None):
     """
@@ -76,40 +73,32 @@ def export_sampled_frames_to_deepmd(run_dir, output_dir, split_ratio=None, logge
     if split_ratio:
         split_and_save(ms, output_dir, split_ratio, logger)
 
-def main():
-    args = parse_args()
-    export_sampled_frames_to_deepmd(args.run_dir, args.output_dir, args.split_ratio)
-
 def split_and_save(ms, output_dir, split_ratio, logger):
     total_frames = ms.get_nframes()
     logger.info(f"开始拆分数据集，总帧数: {total_frames}")
-    
     indices = np.arange(total_frames)
     np.random.shuffle(indices)
     split_points = np.cumsum([int(r * total_frames) for r in split_ratio[:-1]])
     splits = np.split(indices, split_points)
-    
     for i, idx in enumerate(splits):
-        # 创建新的 MultiSystems 用于子集
         sub_ms = dpdata.MultiSystems()
-        
-        # 计算每个子系统的帧范围
         frame_offset = 0
         for sys in ms.systems:
             sys_frames = sys.get_nframes()
-            # 找到属于这个子系统的全局索引
             sys_indices = [j for j in idx if frame_offset <= j < frame_offset + sys_frames]
             if sys_indices:
-                # 转换为局部索引
                 local_indices = [j - frame_offset for j in sys_indices]
                 sub_sys = sys.subset(local_indices)
                 sub_ms.append(sub_sys)
             frame_offset += sys_frames
-        
         sub_dir = os.path.join(output_dir, f"split_{i}")
         os.makedirs(sub_dir, exist_ok=True)
         sub_ms.to_deepmd_npy(sub_dir)
         logger.info(f"已保存拆分子集 {sub_dir}，帧数: {len(idx)}")
+
+def main():
+    args = parse_args()
+    export_sampled_frames_to_deepmd(args.run_dir, args.output_dir, args.split_ratio)
 
 if __name__ == "__main__":
     main()

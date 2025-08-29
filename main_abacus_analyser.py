@@ -292,7 +292,7 @@ class MainApp:
 
         # 步骤7: 导出deepmd采样帧数据集
         try:
-            from abacus_sampled_frames_to_deepmd import export_sampled_frames_to_deepmd
+            from src.io.abacus_sampled_frames_to_deepmd import export_sampled_frames_to_deepmd
             self.logger.info("开始导出采样帧为deepmd数据集...")
             export_sampled_frames_to_deepmd(
                 run_dir=actual_output_dir,

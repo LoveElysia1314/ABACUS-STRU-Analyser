@@ -190,8 +190,10 @@ class FileUtils:
         """
         # Get the directory containing this file
         current_file = os.path.abspath(__file__)
+        # Go up to utils directory
+        utils_dir = os.path.dirname(current_file)
         # Go up to src directory
-        src_dir = os.path.dirname(current_file)
+        src_dir = os.path.dirname(utils_dir)
         # Go up one more level to project root
         project_root = os.path.dirname(src_dir)
         return project_root
