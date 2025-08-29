@@ -167,7 +167,7 @@ class ResultSaver:
         pca_components_data: List[Dict] = None,
         system_path: str = "",
     ) -> None:
-        """Save individual frame metrics to CSV file"""
+        """Save individual frame metrics to CSV file, with energy/force info if available"""
         single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
         FileUtils.ensure_dir(single_analysis_dir)
         csv_path = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
@@ -175,13 +175,10 @@ class ResultSaver:
         try:
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-
-                # 如果有系统路径信息，在文件开头添加注释
-                if system_path:
-                    writer.writerow([f"# System Path: {system_path}"])
-
                 # 准备表头
                 headers = ["Frame_ID", "Selected"]
+                # 能量补充信息（放在前面）
+                headers.append("Energy(eV)")
                 if pca_components_data:
                     # 获取所有可能的PC列
                     max_pc = 0
@@ -191,7 +188,6 @@ class ResultSaver:
                                 pc_num = int(key[2:])
                                 max_pc = max(max_pc, pc_num)
                     headers.extend([f"PC{i}" for i in range(1, max_pc + 1)])
-
                 writer.writerow(headers)
 
                 sampled_set = set(sampled_frames)
@@ -206,10 +202,11 @@ class ResultSaver:
 
                 for i, frame in enumerate(frames):
                     selected = 1 if frame.frame_id in sampled_set else 0
-
                     row = [frame.frame_id, selected]
-
-                    # 添加PCA分量
+                    # 能量补充 - 直接使用FrameData中的信息
+                    energy = frame.energy if frame.energy is not None else ""
+                    row.append(energy)
+                    # 添加PCA分量（放在后面）
                     if pca_components_data and frame.frame_id in pca_lookup:
                         pca_item = pca_lookup[frame.frame_id]
                         for pc_num in range(1, max_pc + 1):
@@ -217,10 +214,8 @@ class ResultSaver:
                             pc_value = pca_item.get(pc_key, 0.0)
                             row.append(f"{pc_value:.6f}")
                     elif pca_components_data:
-                        # 如果没有PCA数据，填充空值
                         for pc_num in range(1, max_pc + 1):
                             row.append("0.000000")
-
                     writer.writerow(row)
         except Exception as e:
             logger = logging.getLogger(__name__)

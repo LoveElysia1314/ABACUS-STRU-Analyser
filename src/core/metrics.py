@@ -18,9 +18,8 @@ class MetricCalculator:
             or getattr(positions, "shape", [0])[0] < 2
         ):
             return np.array([])
-        raw_vectors = pdist(positions)
-        norm = np.linalg.norm(raw_vectors)
-        return raw_vectors / norm if norm > Constants.EPSILON else raw_vectors
+        # 移除L2归一化步骤，直接返回原始距离向量
+        return pdist(positions)
 
     @staticmethod
     def compute_all_metrics(vector_matrix: np.ndarray) -> Dict[str, object]:
@@ -141,6 +140,9 @@ class TrajectoryMetrics:
         self.pca_variance_ratio = 0.0  # PCA目标方差贡献率
         self.pca_explained_variance_ratio = []  # 各主成分方差贡献率
         self.pca_cumulative_variance_ratio = 0.0  # 累积方差贡献率
+        # 综合向量相关字段
+        self.comprehensive_dimension = 0  # 综合向量维度
+        self.energy_available = False  # 是否有能量数据
 
     @property
     def out_abacus_path(self) -> str:
