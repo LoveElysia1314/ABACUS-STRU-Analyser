@@ -162,7 +162,7 @@ class StrUParser:
         """解析能量和力信息，并将其添加到帧数据中"""
         try:
             # 尝试导入能量力解析器
-            from ..analysis.abacus_force_energy_parser import parse_running_md_log
+            from ..analysis.force_energy_parser import parse_running_md_log
 
             # 构建日志文件路径
             log_path = os.path.join(stru_dir, "..", "running_md.log")
@@ -183,7 +183,7 @@ class StrUParser:
                 self.logger.warning(f"Energy/force log file not found: {log_path}")
 
         except ImportError:
-            self.logger.warning("abacus_force_energy_parser module not available, skipping energy/force parsing")
+            self.logger.warning("force_energy_parser module not available, skipping energy/force parsing")
         except Exception as e:
             self.logger.warning(f"Failed to parse energy and force data: {e}")
 

@@ -13,7 +13,7 @@ For new code, prefer importing directly from the specific modules:
 """
 
 # Import from new modular structure
-from .logging.manager import LoggerManager, create_standard_logger
+from .logmanager import LoggerManager, create_standard_logger
 
 # Import legacy compatibility classes
 from .utils import Constants, DirectoryDiscovery

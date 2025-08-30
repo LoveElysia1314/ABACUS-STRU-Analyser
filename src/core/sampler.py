@@ -186,7 +186,7 @@ class GreedyMaxDistanceSampler:
         Returns:
                 选中的帧索引列表、交换次数、改进比例
         """
-        n, d = points.shape
+        n, _ = points.shape
         if k >= n:
             return list(range(n)), 0, 0.0
 

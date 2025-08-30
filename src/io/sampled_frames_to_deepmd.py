@@ -1,8 +1,11 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 """
 根据 analysis_targets.json，自动读取每个体系的 system_path 和 sampled_frames，
 从 OUT.ABACUS 目录提取采样帧，导出 deepmd/npy 数据集，并支持拆分。
 用法：
-    python abacus_sampled_frames_to_deepmd.py --run_dir <分析结果目录> --output_dir <输出npy目录> [--split_ratio 0.8 0.2]
+    python sampled_frames_to_deepmd.py --run_dir <分析结果目录> --output_dir <输出npy目录> [--split_ratio 0.8 0.2]
 
 依赖：dpdata, numpy, pandas, tqdm
 """
@@ -13,7 +16,7 @@ import dpdata
 from tqdm import tqdm
 import numpy as np
 from pathlib import Path
-from src.logging import create_standard_logger
+from src.logmanager import create_standard_logger
 
 def parse_args():
     parser = argparse.ArgumentParser(description="根据analysis_targets.json采样帧导出deepmd数据集并可拆分")
@@ -59,7 +62,8 @@ def export_sampled_frames_to_deepmd(run_dir, output_dir, split_ratio=None, logge
             try:
                 logger.info(f"正在处理 {sys_name}，采样帧数: {len(sampled_frames)}")
                 dd = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
-                sub_dd = dd.subset(sampled_frames)
+                # 修正：使用索引而不是subset方法
+                sub_dd = dd[sampled_frames]
                 ms.append(sub_dd)
                 total_sampled_frames += len(sampled_frames)
                 logger.info(f"成功添加 {sys_name} 采样帧")
@@ -84,11 +88,12 @@ def split_and_save(ms, output_dir, split_ratio, logger):
         sub_ms = dpdata.MultiSystems()
         frame_offset = 0
         for sys in ms.systems:
-            sys_frames = sys.get_nframes()
+            sys_frames = len(sys)  # 使用len()而不是get_nframes()
             sys_indices = [j for j in idx if frame_offset <= j < frame_offset + sys_frames]
             if sys_indices:
                 local_indices = [j - frame_offset for j in sys_indices]
-                sub_sys = sys.subset(local_indices)
+                # 修正：使用索引而不是subset方法
+                sub_sys = sys[local_indices]
                 sub_ms.append(sub_sys)
             frame_offset += sys_frames
         sub_dir = os.path.join(output_dir, f"split_{i}")

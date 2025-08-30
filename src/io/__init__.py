@@ -6,5 +6,6 @@ IO 模块 - 数据输入输出相关功能
 from .path_manager import PathManager
 from .result_saver import ResultSaver
 from .stru_parser import StrUParser
+import sampled_frames_to_deepmd
 
-__all__ = ['PathManager', 'ResultSaver', 'StrUParser']
+__all__ = ['sampled_frames_to_deepmd', 'PathManager', 'ResultSaver', 'StrUParser']
