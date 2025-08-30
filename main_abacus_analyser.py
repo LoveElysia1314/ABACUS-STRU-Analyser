@@ -289,20 +289,6 @@ class MainApp:
             self.logger.error(f"保存分析目标失败: {str(e)}")
         
         self._output_final_statistics(analysis_results, start_time, actual_output_dir, path_manager)
-
-        # 步骤7: 导出deepmd采样帧数据集
-        try:
-            from src.io.abacus_sampled_frames_to_deepmd import export_sampled_frames_to_deepmd
-            self.logger.info("开始导出采样帧为deepmd数据集...")
-            export_sampled_frames_to_deepmd(
-                run_dir=actual_output_dir,
-                output_dir=os.path.join(actual_output_dir, "deepmd_npy"),
-                split_ratio=[0.8, 0.2],
-                logger=self.logger
-            )
-            self.logger.info("采样帧deepmd数据集导出完成")
-        except Exception as e:
-            self.logger.error(f"采样帧deepmd数据集导出失败: {e}")
     
     def _parse_arguments(self) -> argparse.Namespace:
         """解析命令行参数"""
@@ -498,7 +484,7 @@ class MainApp:
         progress_summary = path_manager.get_progress_summary()
         
         # 计算采样统计
-        swap_counts = [result[3] for result in analysis_results]
+        swap_counts = [result[3] for result in analysis_results if len(result) > 3]
         
         self.logger.info("=" * 60)
         self.logger.info(f"分析完成! 处理体系: {len(analysis_results)}/{progress_summary['total']}")
