@@ -14,6 +14,85 @@ from .sampler import PowerMeanSampler
 from ..utils.data_utils import ErrorHandler
 
 
+class RMSDCalculator:
+    """经典RMSD计算器，实现Kabsch算法和迭代对齐"""
+
+    @staticmethod
+    def center_coordinates(coords: np.ndarray) -> np.ndarray:
+        """将坐标平移到质心"""
+        centroid = np.mean(coords, axis=0)
+        return coords - centroid
+
+    @staticmethod
+    def kabsch_align(mobile: np.ndarray, target: np.ndarray) -> np.ndarray:
+        """使用Kabsch算法将mobile坐标对齐到target坐标"""
+        # 确保输入是numpy数组
+        mobile = np.array(mobile, dtype=float)
+        target = np.array(target, dtype=float)
+
+        # 中心化坐标
+        mobile_centered = RMSDCalculator.center_coordinates(mobile)
+        target_centered = RMSDCalculator.center_coordinates(target)
+
+        # 计算协方差矩阵
+        covariance = np.dot(mobile_centered.T, target_centered)
+
+        # SVD分解
+        V, S, Wt = np.linalg.svd(covariance)
+
+        # 检查是否需要反射
+        d = np.sign(np.linalg.det(np.dot(V, Wt)))
+
+        # 构造旋转矩阵
+        rotation = np.dot(V, np.dot(np.diag([1, 1, d]), Wt))
+
+        # 应用旋转和平移
+        aligned = np.dot(mobile_centered, rotation.T)
+
+        return aligned
+
+    @staticmethod
+    def calculate_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
+        """计算两个坐标集之间的RMSD"""
+        diff = coords1 - coords2
+        return np.sqrt(np.mean(np.sum(diff**2, axis=1)))
+
+    @staticmethod
+    def iterative_alignment(frames: List, max_iterations: int = 10, tolerance: float = 1e-5) -> Tuple[np.ndarray, List[float]]:
+        """迭代对齐算法计算均值结构和每帧RMSD"""
+        if not frames:
+            return np.array([]), []
+
+        # 初始化参考结构（第一帧）
+        ref_coords = frames[0].positions.copy()
+        all_coords = [frame.positions.copy() for frame in frames]
+
+        # 迭代对齐
+        for iteration in range(max_iterations):
+            # 对齐所有帧到当前参考
+            aligned_coords = []
+            for coords in all_coords:
+                aligned = RMSDCalculator.kabsch_align(coords, ref_coords)
+                aligned_coords.append(aligned)
+
+            # 计算新的均值结构
+            new_ref = np.mean(aligned_coords, axis=0)
+
+            # 检查收敛
+            if np.allclose(new_ref, ref_coords, atol=tolerance):
+                break
+
+            ref_coords = new_ref
+
+        # 计算每帧RMSD（相对于最终均值结构）
+        rmsds = []
+        for aligned in aligned_coords:
+            rmsd = RMSDCalculator.calculate_rmsd(aligned, ref_coords)
+            rmsds.append(rmsd)
+
+        return ref_coords, rmsds
+
+
 class PCAReducer:
     """PCA降维处理器类，支持按累计方差贡献率降维"""
 
@@ -152,6 +231,22 @@ class SystemAnalyser:
             metrics.pca_explained_variance_ratio = []
             metrics.pca_cumulative_variance_ratio = 0.0
 
+        # 计算经典RMSD（消除平移和旋转影响）
+        try:
+            mean_structure, rmsd_per_frame = RMSDCalculator.iterative_alignment(frames)
+            if len(rmsd_per_frame) > 0:
+                metrics.rmsd_mean = float(np.mean(rmsd_per_frame))
+                metrics.rmsd_per_frame = [float(r) for r in rmsd_per_frame]
+                self.logger.info(f"RMSD计算完成: 均值={metrics.rmsd_mean:.4f}, 帧数={len(rmsd_per_frame)}")
+            else:
+                metrics.rmsd_mean = 0.0
+                metrics.rmsd_per_frame = []
+                self.logger.warning("RMSD计算失败: 无有效帧数据")
+        except Exception as e:
+            self.logger.warning(f"RMSD计算出错: {e}")
+            metrics.rmsd_mean = 0.0
+            metrics.rmsd_per_frame = []
+
         # 构建包含能量、力和PCA分量的综合向量
         comprehensive_matrix = self.build_comprehensive_vectors(frames, reduced_matrix)
 
@@ -177,10 +272,23 @@ class SystemAnalyser:
             sampled_vectors = comprehensive_matrix[sampled_indices]
             sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
             metrics.set_sampled_metrics(sampled_metrics)
+
+            # 计算采样后帧的RMSD均值
+            if len(metrics.rmsd_per_frame) > 0 and len(sampled_indices) > 0:
+                sampled_rmsd_values = [metrics.rmsd_per_frame[i] for i in sampled_indices if i < len(metrics.rmsd_per_frame)]
+                if sampled_rmsd_values:
+                    metrics.rmsd_mean_sampled = float(np.mean(sampled_rmsd_values))
+                    self.logger.info(f"采样后RMSD计算完成: 均值={metrics.rmsd_mean_sampled:.4f}, 采样帧数={len(sampled_rmsd_values)}")
+                else:
+                    metrics.rmsd_mean_sampled = 0.0
+            else:
+                metrics.rmsd_mean_sampled = 0.0
         else:
             metrics.sampled_frames = [f.frame_id for f in frames]
             metrics.set_sampled_metrics(original_metrics)
-        return metrics, frames, swap_count, improve_ratio, pca_components_data, pca_model
+            # 如果没有采样，采样后RMSD均值等于总体RMSD均值
+            metrics.rmsd_mean_sampled = metrics.rmsd_mean
+        return metrics, frames, swap_count, improve_ratio, pca_components_data, pca_model, metrics.rmsd_per_frame
 
     def build_comprehensive_vectors(self, frames: List, reduced_matrix: np.ndarray) -> np.ndarray:
         """构建包含能量和PCA分量的综合向量，并进行标准化和组间缩放"""

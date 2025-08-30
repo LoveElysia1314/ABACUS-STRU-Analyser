@@ -136,15 +136,14 @@ analysis_results/
 | Temperature(K) | 温度 |
 | Num_Frames | 总帧数 |
 | Dimension | 降维后的维度 |
-| MinD | 最小间距 |
-| ANND | 平均最近邻距离 |
-| MPD | 平均成对距离 |
-| MinD_sampled | 采样后最小间距 |
-| ANND_sampled | 采样后平均最近邻距离 |
-| MPD_sampled | 采样后平均成对距离 |
-| MinD_ratio | 最小间距比值 |
-| ANND_ratio | 平均最近邻距离比值 |
-| MPD_ratio | 平均成对距离比值 |
+| RMSD_Mean | RMSD均值（原参数） |
+| RMSD_Mean_Sampled | RMSD均值（采样后参数） |
+| MinD | 最小间距（原参数） |
+| MinD_Sampled | 最小间距（采样后参数） |
+| ANND | 平均最近邻距离（原参数） |
+| ANND_Sampled | 平均最近邻距离（采样后参数） |
+| MPD | 平均成对距离（原参数） |
+| MPD_Sampled | 平均成对距离（采样后参数） |
 | PCA_Variance_Ratio | PCA方差贡献率 |
 | PCA_Cumulative_Variance_Ratio | PCA累计方差贡献率 |
 | PCA_Num_Components_Retained | 保留主成分数量 |
@@ -174,6 +173,7 @@ analysis_results/
 |------|------|
 | Frame_ID | 帧ID |
 | Selected | 是否被选中（1=选中，0=未选中） |
+| RMSD | 基于构象均值的RMSD（单帧指标） |
 | Energy(eV) | 原始能量值 |
 | Energy_Standardized | Z-score标准化后的能量值 |
 | PC1, PC2, ... | 各主成分坐标 |
@@ -194,11 +194,16 @@ MinD = min(distance(p_i, p_j) for all i < j)
 ANND = mean(min(distance(p_i, p_j) for j ≠ i) for all i)
 ```
 
-#### 3. 平均成对距离 (MPD)
-计算所有点对之间距离的平均值：
+#### 4. 经典RMSD (Root Mean Square Deviation)
+基于原子坐标计算的均方根偏差，采用最佳实践消除平移和旋转影响：
+- **对齐方法**: 使用Kabsch算法进行最优旋转对齐
+- **迭代收敛**: 采用迭代对齐计算均值结构，确保RMSD反映真实构象变化
+- **计算公式**: 
 ```
-MPD = mean(distance(p_i, p_j) for all i < j)
+RMSD = sqrt(mean(sum((aligned_coords - mean_structure)^2)))
 ```
+- **RMSD均值**: 所有帧RMSD的平均值，反映轨迹的整体构象多样性
+- **优势**: 完全消除刚体运动影响，专注于构象变化分析
 
 #### 4. PCA降维分析
 使用主成分分析将高维数据投影到低维空间：
