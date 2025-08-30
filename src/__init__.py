@@ -1,3 +1,3 @@
-"""abacus_analyzer package root"""
+"""abacus_analyser package root"""
 
 __all__ = ["core", "io", "utils"]

@@ -62,7 +62,7 @@ class PCAReducer:
                 pca_components_data.append(pca_item)
         return pca_components_data
 
-class SystemAnalyzer:
+class SystemAnalyser:
     def __init__(
         self,
         include_hydrogen: bool = False,
@@ -78,7 +78,7 @@ class SystemAnalyzer:
         self.pca_reducer = PCAReducer(pca_variance_ratio)
         self.logger = logging.getLogger(__name__)
 
-    def analyze_system(self, system_dir: str) -> Optional[Tuple]:
+    def analyse_system(self, system_dir: str) -> Optional[Tuple]:
         system_info = self._extract_system_info(system_dir)
         if not system_info:
             return None
@@ -165,17 +165,17 @@ class SystemAnalyzer:
         return system_name, mol_id, conf, temperature
 
 
-class BatchAnalyzer:
-    def __init__(self, analyzer: SystemAnalyzer):
-        self.analyzer = analyzer
+class BatchAnalyser:
+    def __init__(self, analyser: SystemAnalyser):
+        self.analyser = analyser
         self.logger = logging.getLogger(__name__)
 
-    def analyze_systems(self, system_paths: List[str]) -> List[TrajectoryMetrics]:
+    def analyse_systems(self, system_paths: List[str]) -> List[TrajectoryMetrics]:
         successful_metrics = []
         failed_count = 0
         for i, system_path in enumerate(system_paths):
             try:
-                result = self.analyzer.analyze_system(system_path)
+                result = self.analyser.analyse_system(system_path)
                 if result:
                     metrics, _, _, _, _ = result
                     successful_metrics.append(metrics)
@@ -197,12 +197,12 @@ class BatchAnalyzer:
         )
         return successful_metrics
 
-    def analyze_with_details(self, system_paths: List[str]) -> List[Tuple]:
+    def analyse_with_details(self, system_paths: List[str]) -> List[Tuple]:
         successful_results = []
         failed_count = 0
         for i, system_path in enumerate(system_paths):
             try:
-                result = self.analyzer.analyze_system(system_path)
+                result = self.analyser.analyse_system(system_path)
                 if result:
                     successful_results.append(result)
                     metrics = result[0]

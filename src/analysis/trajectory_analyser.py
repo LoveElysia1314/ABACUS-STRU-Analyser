@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-脚本名: trajectory_analyzer.py
+脚本名: trajectory_analyser.py
 功能: ABACUS 轨迹分析器
 ==================================================
 
@@ -41,7 +41,7 @@ analysis_results/
 
 使用方式：
 ----------
-python trajectory_analyzer.py [--include_h] [--max_workers N] [--sample_ratio R] [--sample_count N]
+python trajectory_analyser.py [--include_h] [--max_workers N] [--sample_ratio R] [--sample_count N]
 
 依赖：
 ------

@@ -166,7 +166,7 @@ class DirectoryDiscovery:
         
         dirname = os.path.basename(system_path).lower()
         project_patterns = [
-            'abacus-stru-analyser', 'analyser', 'analyzer',
+            'abacus-stru-analyser', 'analyser', 'analyser',
             'test', 'demo', 'example', 'sample'
         ]
         

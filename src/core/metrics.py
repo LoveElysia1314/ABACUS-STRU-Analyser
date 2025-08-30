@@ -84,7 +84,7 @@ class MetricCalculator:
 
     @staticmethod
     def estimate_mean_distance(vectors: np.ndarray) -> float:
-        """估计向量矩阵的平均成对距离（从trajectory_analyzer迁移）"""
+        """估计向量矩阵的平均成对距离（从trajectory_analyser迁移）"""
         if ValidationUtils.is_empty(vectors) or len(vectors) <= 1:
             return 0.0
         try:
@@ -95,7 +95,7 @@ class MetricCalculator:
 
     @staticmethod
     def calculate_dRMSF(distance_vectors: np.ndarray) -> float:
-        """计算距离均方根波动（从trajectory_analyzer迁移）"""
+        """计算距离均方根波动（从trajectory_analyser迁移）"""
         if ValidationUtils.is_empty(distance_vectors) or len(distance_vectors) <= 1:
             return 0.0
         variances = np.var(distance_vectors, axis=0)
@@ -104,7 +104,7 @@ class MetricCalculator:
 
     @staticmethod
     def calculate_MeanCV(distance_vectors: np.ndarray) -> float:
-        """计算平均变异系数（从trajectory_analyzer迁移）"""
+        """计算平均变异系数（从trajectory_analyser迁移）"""
         if ValidationUtils.is_empty(distance_vectors) or len(distance_vectors) <= 1:
             return 0.0
         means = np.mean(distance_vectors, axis=0)
