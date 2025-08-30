@@ -210,6 +210,10 @@ class SystemAnalyser:
 
         # 构建综合向量
         for idx, frame_idx in enumerate(valid_frames):
+            frame = frames[frame_idx]
+            # 将标准化能量赋值给FrameData对象
+            frame.energy_standardized = float(energies_standardized[idx])
+            
             pca_components = reduced_matrix[frame_idx]
 
             # 组合向量：能量、PCA分量

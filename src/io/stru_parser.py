@@ -17,6 +17,7 @@ class FrameData:
     elements: List[str]
     distance_vector: Optional[np.ndarray] = None
     energy: Optional[float] = None
+    energy_standardized: Optional[float] = None
     forces: Optional[List[Tuple[str, float, float, float]]] = None
 
 

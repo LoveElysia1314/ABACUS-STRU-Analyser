@@ -174,6 +174,8 @@ analysis_results/
 |------|------|
 | Frame_ID | 帧ID |
 | Selected | 是否被选中（1=选中，0=未选中） |
+| Energy(eV) | 原始能量值 |
+| Energy_Standardized | Z-score标准化后的能量值 |
 | PC1, PC2, ... | 各主成分坐标 |
 
 ## 核心算法

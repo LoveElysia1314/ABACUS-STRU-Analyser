@@ -179,6 +179,7 @@ class ResultSaver:
                 headers = ["Frame_ID", "Selected"]
                 # 能量补充信息（放在前面）
                 headers.append("Energy(eV)")
+                headers.append("Energy_Standardized")
                 if pca_components_data:
                     # 获取所有可能的PC列
                     max_pc = 0
@@ -205,7 +206,9 @@ class ResultSaver:
                     row = [frame.frame_id, selected]
                     # 能量补充 - 直接使用FrameData中的信息
                     energy = frame.energy if frame.energy is not None else ""
+                    energy_standardized = frame.energy_standardized if frame.energy_standardized is not None else ""
                     row.append(energy)
+                    row.append(energy_standardized)
                     # 添加PCA分量（放在后面）
                     if pca_components_data and frame.frame_id in pca_lookup:
                         pca_item = pca_lookup[frame.frame_id]
