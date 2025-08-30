@@ -21,7 +21,7 @@ class PCAReducer:
         self.pca_variance_ratio = pca_variance_ratio
 
     def apply_pca_reduction(self, vector_matrix: np.ndarray) -> Tuple[np.ndarray, Optional[object]]:
-        """应用PCA降维到指定累计方差贡献率"""
+        """应用PCA降维到指定累计方差贡献率，并对每个维度除以总方差进行标准化"""
         try:
             from sklearn.decomposition import PCA
         except ImportError:
@@ -29,9 +29,29 @@ class PCAReducer:
 
         try:
             n_features = vector_matrix.shape[1]
-            # n_components为float时，PCA自动选择满足累计方差贡献率的主成分数
-            pca = PCA(n_components=self.pca_variance_ratio, random_state=42)
+            # 使用相关系数矩阵PCA，不使用白化
+            pca = PCA(n_components=self.pca_variance_ratio, whiten=False, random_state=42)
             reduced = pca.fit_transform(vector_matrix)
+
+            # 对每个主成分除以总方差进行标准化
+            # 计算所有主成分的总方差
+            total_variance = np.sum(pca.explained_variance_)
+
+            if total_variance > 0:
+                # 对每个主成分进行标准化
+                for i in range(reduced.shape[1]):
+                    pc_variance = pca.explained_variance_[i]
+                    if pc_variance > 0:
+                        # 除以总方差的平方根，保持尺度的一致性
+                        scale_factor = np.sqrt(total_variance)
+                        reduced[:, i] /= scale_factor
+
+                        # 记录标准化信息
+                        logger = logging.getLogger(__name__)
+                        logger.debug(f"PC{i+1} 标准化: 方差={pc_variance:.6f}, "
+                                   f"缩放因子={scale_factor:.6f}, "
+                                   f"标准化后方差={np.var(reduced[:, i]):.6f}")
+
             return reduced, pca
         except Exception as e:
             logger = logging.getLogger(__name__)
@@ -131,26 +151,87 @@ class SystemAnalyser:
             metrics.pca_components = 0
             metrics.pca_explained_variance_ratio = []
             metrics.pca_cumulative_variance_ratio = 0.0
-        # 在PCA空间中计算指标
-        original_metrics = MetricCalculator.compute_all_metrics(reduced_matrix)
+
+        # 构建包含能量、力和PCA分量的综合向量
+        comprehensive_matrix = self.build_comprehensive_vectors(frames, reduced_matrix)
+
+        # 设置综合向量相关字段
+        metrics.comprehensive_dimension = comprehensive_matrix.shape[1] if comprehensive_matrix.size > 0 else 0
+        metrics.energy_available = any(frame.energy is not None for frame in frames)
+
+        # 在综合向量空间中计算指标
+        original_metrics = MetricCalculator.compute_all_metrics(comprehensive_matrix)
         metrics.set_original_metrics(original_metrics)
-        # 提取PCA分量用于保存
+
+        # 提取PCA分量用于保存（保持原有逻辑）
         pca_components_data = self.pca_reducer.extract_pca_components(reduced_matrix, frames)
+
         k = max(2, int(round(self.sample_ratio * metrics.num_frames)))
         swap_count, improve_ratio = 0, 0.0
         if k < metrics.num_frames:
-            # 使用新的采样策略：基于MinD和ANND优化
+            # 使用新的采样策略：基于MinD和ANND优化（使用综合向量）
             sampled_indices, swap_count, improve_ratio = PowerMeanSampler.select_frames(
-                reduced_matrix, k, p=self.power_p
+                comprehensive_matrix, k, p=self.power_p
             )
             metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
-            sampled_vectors = reduced_matrix[sampled_indices]
+            sampled_vectors = comprehensive_matrix[sampled_indices]
             sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
             metrics.set_sampled_metrics(sampled_metrics)
         else:
             metrics.sampled_frames = [f.frame_id for f in frames]
             metrics.set_sampled_metrics(original_metrics)
         return metrics, frames, swap_count, improve_ratio, pca_components_data, pca_model
+
+    def build_comprehensive_vectors(self, frames: List, reduced_matrix: np.ndarray) -> np.ndarray:
+        """构建包含能量和PCA分量的综合向量，并进行标准化和组间缩放"""
+        comprehensive_vectors = []
+
+        # 收集所有有效帧的能量数据
+        energies = []
+        valid_frames = []
+
+        for i, frame in enumerate(frames):
+            if i < len(reduced_matrix) and frame.energy is not None:
+                energies.append(frame.energy)
+                valid_frames.append(i)
+
+        if not valid_frames:
+            self.logger.warning("没有找到包含能量数据的帧，使用原始PCA向量")
+            return reduced_matrix
+
+        # 对能量进行标准化
+        energies = np.array(energies)
+        energy_mean = np.mean(energies)
+        energy_std = np.std(energies)
+        if energy_std > 0:
+            energies_standardized = (energies - energy_mean) / energy_std
+        else:
+            energies_standardized = energies - energy_mean
+
+        # 构建综合向量
+        for idx, frame_idx in enumerate(valid_frames):
+            pca_components = reduced_matrix[frame_idx]
+
+            # 组合向量：能量、PCA分量
+            combined_vector = np.concatenate([
+                [energies_standardized[idx]],  # 能量
+                pca_components                 # PCA分量
+            ])
+
+            # 组间缩放：分别除以维度的平方根
+            # 能量维度为1，PCA维度为pca_components.shape[0]
+            energy_dim = 1
+            pca_dim = len(pca_components)
+
+            combined_vector[0] /= np.sqrt(energy_dim)  # 能量缩放
+            for i in range(pca_dim):
+                combined_vector[1 + i] /= np.sqrt(pca_dim)  # PCA分量缩放
+
+            comprehensive_vectors.append(combined_vector)
+
+        comprehensive_matrix = np.array(comprehensive_vectors)
+        self.logger.info(f"构建了 {len(comprehensive_vectors)} 个综合向量，维度: {comprehensive_matrix.shape[1]}")
+        return comprehensive_matrix
 
     def _extract_system_info(
         self, system_dir: str

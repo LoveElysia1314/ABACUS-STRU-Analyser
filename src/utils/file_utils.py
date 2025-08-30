@@ -180,3 +180,18 @@ class FileUtils:
             return os.path.getmtime(file1) > os.path.getmtime(file2)
         except Exception:
             return False
+
+    @staticmethod
+    def get_project_root() -> str:
+        """Get the project root directory
+
+        Returns:
+            Path to project root directory
+        """
+        # Get the directory containing this file
+        current_file = os.path.abspath(__file__)
+        # Go up to src directory
+        src_dir = os.path.dirname(current_file)
+        # Go up one more level to project root
+        project_root = os.path.dirname(src_dir)
+        return project_root
