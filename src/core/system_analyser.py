@@ -237,15 +237,19 @@ class SystemAnalyser:
             if len(rmsd_per_frame) > 0:
                 metrics.rmsd_mean = float(np.mean(rmsd_per_frame))
                 metrics.rmsd_per_frame = [float(r) for r in rmsd_per_frame]
+                # 保存平均构象坐标
+                metrics.mean_structure = mean_structure
                 self.logger.info(f"RMSD计算完成: 均值={metrics.rmsd_mean:.4f}, 帧数={len(rmsd_per_frame)}")
             else:
                 metrics.rmsd_mean = 0.0
                 metrics.rmsd_per_frame = []
+                metrics.mean_structure = None
                 self.logger.warning("RMSD计算失败: 无有效帧数据")
         except Exception as e:
             self.logger.warning(f"RMSD计算出错: {e}")
             metrics.rmsd_mean = 0.0
             metrics.rmsd_per_frame = []
+            metrics.mean_structure = None
 
         # 构建包含能量、力和PCA分量的综合向量
         comprehensive_matrix = self.build_comprehensive_vectors(frames, reduced_matrix)

@@ -37,6 +37,20 @@ class ValidationUtils:
         # For other types, consider non-None as non-empty
         return False
 
+    @staticmethod
+    def validate_file_exists(file_path: str) -> bool:
+        """Check if file exists"""
+        import os
+        return os.path.isfile(file_path)
+
+    @staticmethod
+    def validate_sample_size(data, min_size: int = 2) -> bool:
+        """Check if data has minimum required size"""
+        try:
+            return len(data) >= min_size
+        except (TypeError, AttributeError):
+            return False
+
 
 class ErrorHandler:
     """Utilities for enhanced error handling and logging"""
@@ -71,74 +85,6 @@ class ErrorHandler:
             logger.error(f"根本原因: {error.__cause__}")
         if hasattr(error, '__context__') and error.__context__:
             logger.error(f"上下文: {error.__context__}")
-
-
-class DataUtils:
-    """Utilities for data processing and analysis"""
-
-    @staticmethod
-    def safe_divide(
-        numerator: float, denominator: float, default: float = 0.0
-    ) -> float:
-        """Safe division with default value for zero denominator
-
-        Args:
-            numerator: Numerator value
-            denominator: Denominator value
-            default: Value to return if denominator is zero
-
-        Returns:
-            Division result or default value
-        """
-        if abs(denominator) < 1e-15:  # Avoid division by zero
-            return default
-        return numerator / denominator
-
-    @staticmethod
-    def safe_mean(
-        values: Optional[Union[List[float], np.ndarray]], default: float = 0.0
-    ) -> float:
-        """Safe mean calculation with empty data handling
-
-        Args:
-            values: Values to calculate mean for
-            default: Value to return if values is empty or None
-
-        Returns:
-            Mean value or default
-        """
-        if ValidationUtils.is_empty(values):
-            return default
-
-        if isinstance(values, np.ndarray):
-            return float(np.mean(values))
-        else:
-            return sum(values) / len(values)
-
-    @staticmethod
-    def safe_std(
-        values: Optional[Union[List[float], np.ndarray]], default: float = 0.0
-    ) -> float:
-        """Safe standard deviation calculation
-
-        Args:
-            values: Values to calculate std for
-            default: Value to return if values is empty or None
-
-        Returns:
-            Standard deviation or default
-        """
-        if ValidationUtils.is_empty(values):
-            return default
-
-        if isinstance(values, np.ndarray):
-            return float(np.std(values))
-        else:
-            if len(values) == 1:
-                return 0.0
-            mean_val = sum(values) / len(values)
-            variance = sum((x - mean_val) ** 2 for x in values) / len(values)
-            return variance**0.5
 
 
 class MathUtils:
@@ -215,36 +161,12 @@ class MathUtils:
         """
         if len(values) == 0:
             return default
-        
+
         if p == 0:
             # Geometric mean for p=0
             return np.exp(np.mean(np.log(values + 1e-15)))
         else:
             return np.power(np.mean(np.power(values, p)), 1.0/p)
-
-    @staticmethod
-    def calculate_correlation_strength(abs_r: float) -> str:
-        """Calculate correlation strength interpretation"""
-        if abs_r >= 0.7:
-            return "强相关"
-        elif abs_r >= 0.5:
-            return "中等相关"
-        elif abs_r >= 0.3:
-            return "弱相关"
-        else:
-            return "无相关"
-
-    @staticmethod
-    def calculate_effect_size_interpretation(eta_squared: float) -> str:
-        """Calculate effect size interpretation"""
-        if eta_squared >= 0.14:
-            return "大效应"
-        elif eta_squared >= 0.06:
-            return "中等效应"
-        elif eta_squared >= 0.01:
-            return "小效应"
-        else:
-            return "无效应"
 
     @staticmethod
     def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
@@ -258,10 +180,60 @@ class DataUtils:
     """Data processing and validation utilities"""
 
     @staticmethod
+    def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
+        """Safe division with default value for zero denominator"""
+        return MathUtils.safe_divide(numerator, denominator, default)
+
+    @staticmethod
+    def safe_mean(
+        values: Optional[Union[List[float], np.ndarray]], default: float = 0.0
+    ) -> float:
+        """Safe mean calculation with empty data handling
+
+        Args:
+            values: Values to calculate mean for
+            default: Value to return if values is empty or None
+
+        Returns:
+            Mean value or default
+        """
+        if ValidationUtils.is_empty(values):
+            return default
+
+        if isinstance(values, np.ndarray):
+            return float(np.mean(values))
+        else:
+            return sum(values) / len(values)
+
+    @staticmethod
+    def safe_std(
+        values: Optional[Union[List[float], np.ndarray]], default: float = 0.0
+    ) -> float:
+        """Safe standard deviation calculation
+
+        Args:
+            values: Values to calculate std for
+            default: Value to return if values is empty or None
+
+        Returns:
+            Standard deviation or default
+        """
+        if ValidationUtils.is_empty(values):
+            return default
+
+        if isinstance(values, np.ndarray):
+            return float(np.std(values))
+        else:
+            if len(values) == 1:
+                return 0.0
+            mean_val = sum(values) / len(values)
+            variance = sum((x - mean_val) ** 2 for x in values) / len(values)
+            return variance**0.5
+
+    @staticmethod
     def to_python_types(obj):
         """Convert numpy types to Python native types"""
         try:
-            import numpy as np
             if isinstance(obj, (list, tuple)):
                 return [DataUtils.to_python_types(item) for item in obj]
             elif isinstance(obj, np.integer):
@@ -301,48 +273,7 @@ class DataUtils:
         except Exception:
             return str(num)
 
-    @staticmethod
-    def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:
-        """Safe division with default value for zero denominator"""
-        return MathUtils.safe_divide(numerator, denominator, default)
 
 
-# Maintain backward compatibility
-def is_empty_unified(obj: Any) -> bool:
-    """Deprecated: Use ValidationUtils.is_empty() instead"""
-    return ValidationUtils.is_empty(obj)
-
-
-class ValidationUtils:
-    """Validation utilities"""
-
-    @staticmethod
-    def validate_file_exists(file_path: str) -> bool:
-        """Check if file exists"""
-        import os
-        return os.path.isfile(file_path)
-
-    @staticmethod
-    def validate_sample_size(data, min_size: int = 2) -> bool:
-        """Check if data has minimum required size"""
-        try:
-            return len(data) >= min_size
-        except (TypeError, AttributeError):
-            return False
-
-    @staticmethod
-    def is_empty(obj: Any) -> bool:
-        """Unified empty check for various data types"""
-        if obj is None:
-            return True
-        if hasattr(obj, "__len__"):
-            return len(obj) == 0
-        try:
-            import numpy as np
-            if isinstance(obj, np.ndarray):
-                return obj.size == 0
-        except ImportError:
-            pass
-        return False
 
 

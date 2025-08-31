@@ -4,9 +4,9 @@ import os
 from typing import Dict
 
 import numpy as np
-from scipy.spatial.distance import pdist
+from scipy.spatial.distance import pdist, cdist
 
-from ..utils import Constants, MathUtils, ValidationUtils
+from ..utils import Constants, ValidationUtils
 
 
 class MetricCalculator:
@@ -67,7 +67,6 @@ class MetricCalculator:
         if ValidationUtils.is_empty(vector_matrix) or len(vector_matrix) <= 1:
             return 0.0
         try:
-            from scipy.spatial.distance import cdist
             # 计算所有点对距离矩阵
             distance_matrix = cdist(vector_matrix, vector_matrix, metric="euclidean")
             # 将对角线（自身距离）设为无穷大
@@ -148,6 +147,8 @@ class TrajectoryMetrics:
         # 综合向量相关字段
         self.comprehensive_dimension = 0  # 综合向量维度
         self.energy_available = False  # 是否有能量数据
+        # 平均构象坐标（用于后续构象统一）
+        self.mean_structure = None  # 平均构象坐标，numpy数组形状为(n_atoms, 3)
 
     @property
     def out_abacus_path(self) -> str:

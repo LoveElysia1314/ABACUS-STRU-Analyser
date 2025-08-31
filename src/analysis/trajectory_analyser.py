@@ -186,60 +186,7 @@ def greedy_max_avg_distance(points, k, frame_MinD_values, num_runs=10, seed=42):
 
 
 # --- 核心分析逻辑 ---
-def estimate_mean_distance(vectors):
-    N = len(vectors)
-    if N <= 1:
-        return 0.0
-    try:
-        pairwise_distances = pdist(vectors, metric="euclidean")
-        return float(np.mean(pairwise_distances))
-    except Exception as e:
-        logger.error(f"pdist 计算失败: {e}")
-        return 0.0
 
-
-def calculate_MinD(distance_vectors):
-    """计算最小间距 (Minimum Distance)"""
-    if len(distance_vectors) <= 1:
-        return 0.0
-    try:
-        pairwise_distances = pdist(distance_vectors, metric="euclidean")
-        return float(np.min(pairwise_distances)) if len(pairwise_distances) > 0 else 0.0
-    except Exception as e:
-        logger.error(f"MinD 计算失败: {e}")
-        return 0.0
-
-
-def calculate_ANND(distance_vectors):
-    """计算平均最近邻距离 (Average Nearest Neighbor Distance)"""
-    if len(distance_vectors) <= 1:
-        return 0.0
-    try:
-        # 计算所有点对距离矩阵
-        distance_matrix = cdist(distance_vectors, distance_vectors, metric="euclidean")
-        # 将对角线（自身距离）设为无穷大
-        np.fill_diagonal(distance_matrix, np.inf)
-        # 找到每行的最小距离（最近邻距离）
-        nearest_neighbor_distances = np.min(distance_matrix, axis=1)
-        # 返回平均值
-        return float(np.mean(nearest_neighbor_distances))
-    except Exception as e:
-        logger.error(f"ANND 计算失败: {e}")
-        return 0.0
-
-
-def calculate_dRMSF(distance_vectors):
-    if len(distance_vectors) <= 1:
-        return 0.0
-    variances = np.var(distance_vectors, axis=0)
-    mean_variance = np.mean(variances)
-    return float(np.sqrt(mean_variance))
-
-
-def calculate_MeanCV(distance_vectors):
-    if len(distance_vectors) <= 1:
-        return 0.0
-    np.mean(distance_vectors, axis=0)
 
 
 def calculate_rmsd(positions_list, reference=None):

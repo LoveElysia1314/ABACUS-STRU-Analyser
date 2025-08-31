@@ -36,6 +36,7 @@ class ResultSaver:
         "PCA_Cumulative_Variance_Ratio",
         "PCA_Num_Components_Retained",
         "PCA_Variance_Ratios",  # 各主成分方差贡献率（JSON格式）
+        "Mean_Structure_Coordinates",  # 平均构象坐标（JSON格式）
     ]
 
     SAMPLING_RECORDS_HEADERS = ["System", "System_Path", "Sampled_Frames"]  # Sampled_Frames格式: [1,5,10,15,20]
@@ -80,11 +81,19 @@ class ResultSaver:
         # PCA相关
         import json
         pca_variance_ratios_str = json.dumps(metrics.pca_explained_variance_ratio, ensure_ascii=False)
+        
+        # 平均构象坐标（JSON格式）
+        if metrics.mean_structure is not None:
+            mean_structure_str = json.dumps(metrics.mean_structure.tolist(), ensure_ascii=False)
+        else:
+            mean_structure_str = ""
+        
         row.extend([
             f"{metrics.pca_variance_ratio:.6f}",
             f"{metrics.pca_cumulative_variance_ratio:.6f}",
             f"{int(metrics.pca_components)}",
             pca_variance_ratios_str,
+            mean_structure_str,
         ])
 
         return row

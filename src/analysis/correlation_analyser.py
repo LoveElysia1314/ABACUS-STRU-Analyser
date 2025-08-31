@@ -6,7 +6,9 @@
 
 功能特性：
 ---------
-✨ 专业的统计分析模块，用于分析 ABACUS STRU 轨迹数据
+✨ 专业的统            self.logger.info(f"分子: {DataUtils.to_python_types(molecules)}")
+            self.logger.info(f"构象编号: {DataUtils.to_python_types(configs)}")
+            self.logger.info(f"温度: {DataUtils.to_python_types(temperatures)}K")模块，用于分析 ABACUS STRU 轨迹数据
 🔬 科学严谨的统计方法，确保结果可靠性
 📊 智能的样本量检查和质量控制
 🛡️ 稳健的分析策略，避免小样本偏误
@@ -94,9 +96,7 @@ class CorrelationAnalyser:
             date_format=Constants.DEFAULT_DATE_FORMAT,
         )
 
-    def _to_python_list(self, seq):
-        """将序列中的numpy类型转为Python原生类型"""
-        return DataUtils.to_python_types(seq)
+
 
     def analyse_correlations(self, csv_file_path: str, output_dir: str) -> bool:
         """
@@ -477,14 +477,6 @@ class CorrelationAnalyser:
 
         return global_config_results
 
-    def _get_correlation_strength(self, abs_r: float) -> str:
-        """获取相关性强度解释"""
-        return MathUtils.calculate_correlation_strength(abs_r)
-
-    def _get_effect_size_interpretation(self, eta_squared: float) -> str:
-        """获取效应量解释"""
-        return MathUtils.calculate_effect_size_interpretation(eta_squared)
-
     def _get_confidence_level(self, p_value: float) -> str:
         """获取置信程度评价"""
         if p_value < 0.001:
@@ -667,7 +659,7 @@ class CorrelationAnalyser:
                 valid_groups_config = first_config["Valid_Groups"]
                 configs = first_config["Configurations"]
                 self.logger.info(f"   构象分析: {valid_samples_config}/{total_samples}有效样本 (过滤{filtered_samples_config})")
-                self.logger.info(f"   构象类型: {self._to_python_list(sorted(configs))}")
+                self.logger.info(f"   构象类型: {DataUtils.to_python_types(sorted(configs))}")
 
         # 温度相关性分析结果
         if global_temp_results:
@@ -695,13 +687,13 @@ class CorrelationAnalyser:
                 p_value = result["P_value"]
                 eta_sq = result["Eta_squared"]
 
+                evaluation = self._get_configuration_effect_evaluation(eta_sq, p_value)
+                if p_value is not None and not (isinstance(p_value, float) and np.isnan(p_value)) and p_value < 0.05:
+                    evaluation += f" (η²={eta_sq:.3f})"
+                
                 if np.isnan(f_stat) or np.isnan(p_value):
-                    evaluation = "数据不足，无法计算"
                     stat_info = "F=nan (p=nan)"
                 else:
-                    evaluation = self._get_configuration_effect_evaluation(eta_sq, p_value)
-                    if p_value < 0.05:
-                        evaluation += f" (η²={eta_sq:.3f})"
                     stat_info = f"F={f_stat:.3f} (p={p_value:.3f})"
 
                 self.logger.info(
@@ -712,6 +704,12 @@ class CorrelationAnalyser:
 
     def _get_temperature_correlation_evaluation(self, r: float, p_value: float) -> str:
         """根据新标准自动评价温度相关性"""
+        if p_value is None or (isinstance(p_value, float) and np.isnan(p_value)):
+            return "数据不足，无法计算"
+        
+        if r is None or (isinstance(r, float) and np.isnan(r)):
+            return "相关系数无效，无法计算"
+        
         if p_value < 0.05:
             abs_r = abs(r)
             if abs_r >= 0.5:
@@ -729,6 +727,9 @@ class CorrelationAnalyser:
 
     def _get_configuration_effect_evaluation(self, eta_squared: float, p_value: float) -> str:
         """根据新标准自动评价构象效应"""
+        if p_value is None or (isinstance(p_value, float) and np.isnan(p_value)):
+            return "数据不足，无法计算"
+        
         if p_value < 0.05:
             if eta_squared >= 0.04:
                 effect_size = "中等效应"
