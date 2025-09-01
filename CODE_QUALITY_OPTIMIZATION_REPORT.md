@@ -30,64 +30,20 @@
 
 ## 🚨 高优先级问题 (P0)
 
-### 1. 代码冗余与重复实现
-**问题严重程度：** 🔴 严重  
-**影响范围：** 全项目  
-**工作量评估：** 中等 (2-3周)
+### 1. 代码冗余与重复实现（阶段进度：部分完成 ✅）
+本阶段已完成：
+- 新增 `src/utils/metrics_utils.py`，集中实现 MinD / ANND / MPD、RMSD汇总、多样性指标、分布相似性。
+- `sampling_compare_demo.py` 已切换为使用统一工具，移除本地重复函数。
 
-#### 问题描述
-项目中存在大量重复的计算逻辑：
-- 统计指标计算在多个文件中重复实现
-- RMSD计算函数在不同模块中重复
-- 距离矩阵计算逻辑散布在多个位置
+待后续完成：
+- 将 `core/metrics.py` 中基础距离计算内部实现逐步重定向到新工具（保持接口不破坏现有调用）。
+- 若 `system_analyser` 中的 RMSD 逻辑存在与后续其它脚本重复，再评估是否抽象对齐函数。
 
-#### 具体实例
-```python
-# sampling_compare_demo.py (第12行)
-def calc_metrics(vectors):
-    # MinD, ANND, MPD 计算逻辑
+收益（初步）：
+- 采样对比脚本重复逻辑删除（多函数合并为包装调用）。
+- 指标扩展（多样性/分布/统计汇总）具备统一入口，便于后续测试覆盖。
 
-# src/core/metrics.py (第60行)  
-def _calculate_MinD(vector_matrix: np.ndarray) -> float:
-    # 相同的 MinD 计算逻辑
-```
-
-#### 影响分析
-- **维护困难：** 修改一处需要同步多处
-- **Bug传播：** 修复一处，其他地方可能遗漏
-- **测试复杂：** 相同逻辑需要重复测试
-
-#### 解决方案
-1. **创建统一指标计算模块**
-   ```python
-   # 新建 src/utils/metrics_utils.py
-   class UnifiedMetricsCalculator:
-       @staticmethod
-       def calculate_basic_metrics(vectors: np.ndarray) -> dict:
-           """统一的 MinD, ANND, MPD 计算"""
-           
-       @staticmethod
-       def calculate_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
-           """统一的 RMSD 计算"""
-   ```
-
-2. **重构现有代码**
-   - 将 `sampling_compare_demo.py` 中的函数迁移到统一模块
-   - 更新所有相关文件的导入
-   - 删除重复实现
-
-#### 实施步骤
-1. 创建 `src/utils/metrics_utils.py`
-2. 实现统一计算函数
-3. 更新 `sampling_compare_demo.py` 使用新模块
-4. 更新 `src/core/metrics.py` 移除重复逻辑
-5. 更新所有相关导入
-6. 运行完整测试套件验证功能
-
-#### 预期收益
-- 减少代码行数：约15-20%
-- 提高维护效率：统一修改点
-- 减少Bug风险：消除不一致性
+下一步触发条件：你确认当前脚本运行无回归后，进入核心模块 (`core/metrics.py`) 去除残余重复实现。
 
 ---
 

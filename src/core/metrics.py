@@ -7,6 +7,7 @@ import numpy as np
 from scipy.spatial.distance import pdist, cdist
 
 from ..utils import Constants, ValidationUtils
+from ..utils.metrics_utils import compute_basic_distance_metrics  # 统一距离指标
 
 
 class MetricCalculator:
@@ -23,73 +24,42 @@ class MetricCalculator:
 
     @staticmethod
     def compute_all_metrics(vector_matrix: np.ndarray) -> Dict[str, object]:
-        # Accept either lists or numpy arrays: use .size when available for correctness
-        if ValidationUtils.is_empty(vector_matrix):
-            return {
-                "global_mean": 0.0,
-                "MinD": 0.0,
-                "ANND": 0.0,
-            }
+        """统一计算距离相关指标。
 
-        # At this point vector_matrix is non-empty. Compute means directly.
-        global_mean = np.mean(vector_matrix)
+        已重构为调用 metrics_utils.compute_basic_distance_metrics 以消除重复。
+        保持原返回结构向后兼容。
+        """
+        if ValidationUtils.is_empty(vector_matrix) or getattr(vector_matrix, "shape", [0])[0] < 2:
+            return {"global_mean": 0.0, "MinD": 0.0, "ANND": 0.0, "MPD": 0.0}
 
-        # 计算最小间距 (MinD)
-        MinD = MetricCalculator._calculate_MinD(vector_matrix)
-
-        # 计算平均最近邻距离 (ANND)
-        ANND = MetricCalculator._calculate_ANND(vector_matrix)
-
-        # 计算平均成对距离 (MPD)
-        MPD = MetricCalculator.estimate_mean_distance(vector_matrix)
-
+        global_mean = float(np.mean(vector_matrix))
+        basic = compute_basic_distance_metrics(vector_matrix)
         return {
             "global_mean": global_mean,
-            "MinD": MinD,
-            "ANND": ANND,
-            "MPD": MPD,
+            "MinD": basic.MinD,
+            "ANND": basic.ANND,
+            "MPD": basic.MPD,
         }
 
     @staticmethod
-    def _calculate_MinD(vector_matrix: np.ndarray) -> float:
-        """计算最小间距 (Minimum Distance)"""
-        if ValidationUtils.is_empty(vector_matrix) or len(vector_matrix) <= 1:
-            return 0.0
-        try:
-            pairwise_distances = pdist(vector_matrix, metric="euclidean")
-            return float(np.min(pairwise_distances)) if len(pairwise_distances) > 0 else 0.0
-        except Exception:
-            return 0.0
+    def _calculate_MinD(vector_matrix: np.ndarray) -> float:  # deprecated
+        """(Deprecated) 保留旧接口，内部委托统一工具。"""
+        basic = compute_basic_distance_metrics(vector_matrix)
+        return 0.0 if np.isnan(basic.MinD) else float(basic.MinD)
 
     @staticmethod
-    def _calculate_ANND(vector_matrix: np.ndarray) -> float:
-        """计算平均最近邻距离 (Average Nearest Neighbor Distance)"""
-        if ValidationUtils.is_empty(vector_matrix) or len(vector_matrix) <= 1:
-            return 0.0
-        try:
-            # 计算所有点对距离矩阵
-            distance_matrix = cdist(vector_matrix, vector_matrix, metric="euclidean")
-            # 将对角线（自身距离）设为无穷大
-            np.fill_diagonal(distance_matrix, np.inf)
-            # 找到每行的最小距离（最近邻距离）
-            nearest_neighbor_distances = np.min(distance_matrix, axis=1)
-            # 返回平均值
-            return float(np.mean(nearest_neighbor_distances))
-        except Exception:
-            return 0.0
+    def _calculate_ANND(vector_matrix: np.ndarray) -> float:  # deprecated
+        """(Deprecated) 保留旧接口，内部委托统一工具。"""
+        basic = compute_basic_distance_metrics(vector_matrix)
+        return 0.0 if np.isnan(basic.ANND) else float(basic.ANND)
 
 
 
     @staticmethod
-    def estimate_mean_distance(vectors: np.ndarray) -> float:
-        """估计向量矩阵的平均成对距离（从trajectory_analyser迁移）"""
-        if ValidationUtils.is_empty(vectors) or len(vectors) <= 1:
-            return 0.0
-        try:
-            pairwise_distances = pdist(vectors, metric="euclidean")
-            return float(np.mean(pairwise_distances))
-        except Exception:
-            return 0.0
+    def estimate_mean_distance(vectors: np.ndarray) -> float:  # deprecated
+        """(Deprecated) 平均成对距离，委托统一工具 MPD。"""
+        basic = compute_basic_distance_metrics(vectors)
+        return 0.0 if np.isnan(basic.MPD) else float(basic.MPD)
 
     @staticmethod
     def calculate_dRMSF(distance_vectors: np.ndarray) -> float:

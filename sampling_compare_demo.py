@@ -14,220 +14,37 @@ warnings.filterwarnings('ignore')
 
 logger = LoggerManager.create_logger(__name__)
 
-def calc_metrics(vectors):
-    """计算基础距离指标"""
-    from scipy.spatial.distance import pdist, squareform
-    if len(vectors) < 2:
-        return np.nan, np.nan, np.nan
-    
-    try:
-        dists = squareform(pdist(vectors, metric='euclidean'))
-        np.fill_diagonal(dists, np.inf)
-        
-        # 检查是否有有效的距离值
-        valid_dists = dists[dists != np.inf]
-        if len(valid_dists) == 0:
-            return np.nan, np.nan, np.nan
-        
-        min_d = np.min(valid_dists) if len(valid_dists) > 0 else np.nan
-        annd = np.mean(np.min(dists, axis=1)) if np.any(np.isfinite(np.min(dists, axis=1))) else np.nan
-        mpd = np.mean(valid_dists) if len(valid_dists) > 0 else np.nan
-        
-        return min_d, annd, mpd
-    except Exception:
-        logger.exception("计算基础指标时出错")
-        return np.nan, np.nan, np.nan
+from src.utils.metrics_utils import (
+    compute_basic_distance_metrics,
+    compute_diversity_metrics,
+    compute_distribution_similarity,
+    summarize_rmsd,
+)
 
-def calc_diversity_metrics(vectors):
-    """计算多样性相关指标"""
-    if len(vectors) < 2:
-        return {
-            'diversity_score': np.nan,
-            'coverage_ratio': np.nan,
-            'pca_variance_ratio': np.nan,
-            'energy_range': np.nan
-        }
-
-    # 检查并处理NaN值
-    if np.any(np.isnan(vectors)):
-        # 移除包含NaN的行
-        valid_mask = ~np.any(np.isnan(vectors), axis=1)
-        vectors = vectors[valid_mask]
-        if len(vectors) < 2:
-            return {
-                'diversity_score': np.nan,
-                'coverage_ratio': np.nan,
-                'pca_variance_ratio': np.nan,
-                'energy_range': np.nan
-            }
-
-    try:
-        # 多样性得分：基于距离矩阵的熵
-        dists = squareform(pdist(vectors, metric='euclidean'))
-        np.fill_diagonal(dists, np.inf)
-
-        # 检查距离矩阵是否有效
-        if np.all(np.isinf(dists)) or np.any(np.isnan(dists)):
-            return {
-                'diversity_score': np.nan,
-                'coverage_ratio': np.nan,
-                'pca_variance_ratio': np.nan,
-                'energy_range': np.nan
-            }
-
-        # 归一化距离矩阵
-        max_dist = np.max(dists[dists != np.inf])
-        if np.isnan(max_dist) or max_dist == 0:
-            dists_norm = dists
-        else:
-            dists_norm = dists / max_dist
-
-        # 提取有效距离值
-        dist_flat = dists_norm[dists_norm != np.inf].flatten()
-        dist_flat = dist_flat[~np.isnan(dist_flat)]  # 移除NaN值
-
-        if len(dist_flat) == 0:
-            diversity_score = np.nan
-        else:
-            # 计算多样性得分（距离分布的熵）
-            hist, _ = np.histogram(dist_flat, bins=20, density=True)
-            diversity_score = entropy(hist + 1e-10)  # 添加小值避免log(0)
-
-        # 覆盖率：凸包体积比（简化版）
-        try:
-            pca = PCA(n_components=min(3, vectors.shape[1]))
-            pca_result = pca.fit_transform(vectors)
-            explained_variance = np.sum(pca.explained_variance_ratio_)
-            coverage_ratio = explained_variance
-        except:
-            coverage_ratio = np.nan
-
-        # PCA方差贡献率
-        pca_variance_ratio = explained_variance if 'explained_variance' in locals() else np.nan
-
-        # 能量范围（如果有能量列）
-        energy_range = np.nan
-        if vectors.shape[1] > 0:
-            # 假设第一列是能量
-            energy_col = vectors[:, 0]
-            if not np.all(np.isnan(energy_col)):
-                energy_range = np.ptp(energy_col[~np.isnan(energy_col)])
-
-    except Exception:
-        logger.exception("计算多样性指标时出错")
-        return {
-            'diversity_score': np.nan,
-            'coverage_ratio': np.nan,
-            'pca_variance_ratio': np.nan,
-            'energy_range': np.nan
-        }
-
+def _wrap_diversity(vectors: np.ndarray):
+    m = compute_diversity_metrics(vectors)
     return {
-        'diversity_score': diversity_score,
-        'coverage_ratio': coverage_ratio,
-        'pca_variance_ratio': pca_variance_ratio,
-        'energy_range': energy_range
+        'diversity_score': m.diversity_score,
+        'coverage_ratio': m.coverage_ratio,
+        'pca_variance_ratio': m.pca_variance_ratio,
+        'energy_range': m.energy_range,
     }
 
-def calc_rmsd_metrics(rmsd_values):
-    """计算RMSD相关指标"""
-    rmsd_values = np.array(rmsd_values)
-    
-    if len(rmsd_values) == 0 or (len(rmsd_values) > 0 and np.all(np.isnan(rmsd_values))):
-        return {
-            'rmsd_mean': np.nan,
-            'rmsd_std': np.nan,
-            'rmsd_min': np.nan,
-            'rmsd_max': np.nan
-        }
-    
-    # 过滤NaN值
-    valid_values = rmsd_values[~np.isnan(rmsd_values)]
-    
-    if len(valid_values) == 0:
-        return {
-            'rmsd_mean': np.nan,
-            'rmsd_std': np.nan,
-            'rmsd_min': np.nan,
-            'rmsd_max': np.nan
-        }
-    
+def _wrap_rmsd(values):
+    s = summarize_rmsd(values)
     return {
-        'rmsd_mean': np.mean(valid_values),
-        'rmsd_std': np.std(valid_values) if len(valid_values) > 1 else np.nan,
-        'rmsd_min': np.min(valid_values),
-        'rmsd_max': np.max(valid_values)
+        'rmsd_mean': s.rmsd_mean,
+        'rmsd_std': s.rmsd_std,
+        'rmsd_min': s.rmsd_min,
+        'rmsd_max': s.rmsd_max,
     }
 
-def calc_distribution_similarity(sample_vectors, full_vectors):
-    """计算采样分布与全集分布的相似性"""
-    if len(sample_vectors) < 2 or len(full_vectors) < 2:
-        return {
-            'js_divergence': np.nan,
-            'emd_distance': np.nan,
-            'mean_distance': np.nan
-        }
-
-    # 检查并处理NaN值
-    if np.any(np.isnan(sample_vectors)):
-        valid_mask = ~np.any(np.isnan(sample_vectors), axis=1)
-        sample_vectors = sample_vectors[valid_mask]
-
-    if np.any(np.isnan(full_vectors)):
-        valid_mask = ~np.any(np.isnan(full_vectors), axis=1)
-        full_vectors = full_vectors[valid_mask]
-
-    if len(sample_vectors) < 2 or len(full_vectors) < 2:
-        return {
-            'js_divergence': np.nan,
-            'emd_distance': np.nan,
-            'mean_distance': np.nan
-        }
-
-    try:
-        # Jensen-Shannon散度（简化版，使用PCA投影）
-        pca = PCA(n_components=min(3, sample_vectors.shape[1]))
-        sample_pca = pca.fit_transform(sample_vectors)
-        full_pca = pca.transform(full_vectors)
-
-        # 计算一维分布的JS散度
-        js_divs = []
-        for i in range(sample_pca.shape[1]):
-            sample_hist, _ = np.histogram(sample_pca[:, i], bins=20, density=True)
-            full_hist, _ = np.histogram(full_pca[:, i], bins=20, density=True)
-            # 归一化
-            sample_hist = sample_hist / (np.sum(sample_hist) + 1e-10)
-            full_hist = full_hist / (np.sum(full_hist) + 1e-10)
-            m = 0.5 * (sample_hist + full_hist)
-            js_div = 0.5 * (entropy(sample_hist + 1e-10, m + 1e-10) + entropy(full_hist + 1e-10, m + 1e-10))
-            js_divs.append(js_div)
-        js_divergence = np.mean(js_divs)
-
-        # Earth Mover's Distance
-        emd_distances = []
-        for i in range(min(3, sample_pca.shape[1])):
-            try:
-                emd = wasserstein_distance(sample_pca[:, i], full_pca[:, i])
-                emd_distances.append(emd)
-            except:
-                emd_distances.append(np.nan)
-        emd_distance = np.nanmean(emd_distances)
-
-        # 平均距离（采样点到全集质心的距离）
-        sample_centroid = np.mean(sample_vectors, axis=0)
-        full_centroid = np.mean(full_vectors, axis=0)
-        mean_distance = np.linalg.norm(sample_centroid - full_centroid)
-
-    except Exception:
-        logger.exception("计算分布相似性时出错")
-        js_divergence = np.nan
-        emd_distance = np.nan
-        mean_distance = np.nan
-
+def _wrap_similarity(sample_vectors: np.ndarray, full_vectors: np.ndarray):
+    m = compute_distribution_similarity(sample_vectors, full_vectors)
     return {
-        'js_divergence': js_divergence,
-        'emd_distance': emd_distance,
-        'mean_distance': mean_distance
+        'js_divergence': m.js_divergence,
+        'emd_distance': m.emd_distance,
+        'mean_distance': m.mean_distance,
     }
 
 def uniform_sample_indices(n, k):
@@ -249,35 +66,34 @@ def analyse_sampling_compare(result_dir=None):
     for f in files:
         df = pd.read_csv(f)
         system = os.path.basename(f).replace('frame_metrics_', '').replace('.csv', '')
-        # 只保留Energy_Standardized和PC分量作为采样向量
         vector_cols = [col for col in df.columns if (col == 'Energy_Standardized' or col.startswith('PC'))]
         vectors = df[vector_cols].values
         selected = df['Selected'] == 1
         k = selected.sum()
         n = len(df)
         sample_ratio = k / n if n > 0 else 0
-
-        # 读取RMSD数据
         rmsd_data = []
         if 'RMSD' in df.columns:
             rmsd_data = pd.to_numeric(df['RMSD'], errors='coerce').values
-        
-        # 你的采样
-        minD, annd, mpd = calc_metrics(vectors[selected])
-        sampled_diversity = calc_diversity_metrics(vectors[selected])
-        sampled_similarity = calc_distribution_similarity(vectors[selected], vectors)
-        sampled_rmsd = calc_rmsd_metrics(rmsd_data[selected] if len(rmsd_data) > 0 else [])
+
+        # 采样算法结果
+        basic = compute_basic_distance_metrics(vectors[selected])
+        sampled_diversity = _wrap_diversity(vectors[selected])
+        sampled_similarity = _wrap_similarity(vectors[selected], vectors)
+        sampled_rmsd = _wrap_rmsd(rmsd_data[selected] if len(rmsd_data) > 0 else [])
 
         # 随机采样（多次运行）
         rand_results = []
         for _ in range(10):
+            if k == 0 or n == 0:
+                break
             idx = np.random.choice(n, k, replace=False)
-            m, a, p = calc_metrics(vectors[idx])
-            div = calc_diversity_metrics(vectors[idx])
-            sim = calc_distribution_similarity(vectors[idx], vectors)
-            rmsd_metrics = calc_rmsd_metrics(rmsd_data[idx] if len(rmsd_data) > 0 else [])
+            b2 = compute_basic_distance_metrics(vectors[idx])
+            div = _wrap_diversity(vectors[idx])
+            sim = _wrap_similarity(vectors[idx], vectors)
+            rmsd_metrics = _wrap_rmsd(rmsd_data[idx] if len(rmsd_data) > 0 else [])
             rand_results.append({
-                'minD': m, 'annd': a, 'mpd': p,
+                'minD': b2.MinD, 'annd': b2.ANND, 'mpd': b2.MPD,
                 'diversity_score': div['diversity_score'],
                 'coverage_ratio': div['coverage_ratio'],
                 'js_divergence': sim['js_divergence'],
@@ -286,13 +102,13 @@ def analyse_sampling_compare(result_dir=None):
             })
 
         # 均匀采样
-        idx_uniform = uniform_sample_indices(n, k)
-        minD_uni, annd_uni, mpd_uni = calc_metrics(vectors[idx_uniform])
-        uniform_diversity = calc_diversity_metrics(vectors[idx_uniform])
-        uniform_similarity = calc_distribution_similarity(vectors[idx_uniform], vectors)
-        uniform_rmsd = calc_rmsd_metrics(rmsd_data[idx_uniform] if len(rmsd_data) > 0 else [])
+        idx_uniform = uniform_sample_indices(n, k) if k > 0 else np.array([], dtype=int)
+        basic_uniform = compute_basic_distance_metrics(vectors[idx_uniform]) if k > 0 else compute_basic_distance_metrics(np.empty((0,)))
+        uniform_diversity = _wrap_diversity(vectors[idx_uniform]) if k > 0 else _wrap_diversity(np.empty((0,)))
+        uniform_similarity = _wrap_similarity(vectors[idx_uniform], vectors) if k > 1 else {'js_divergence': np.nan, 'emd_distance': np.nan, 'mean_distance': np.nan}
+        uniform_rmsd = _wrap_rmsd(rmsd_data[idx_uniform] if (k > 0 and len(rmsd_data) > 0) else [])
 
-        # 计算随机采样的统计量
+        # 统计集合
         rand_minD = [r['minD'] for r in rand_results if not np.isnan(r['minD'])]
         rand_annd = [r['annd'] for r in rand_results if not np.isnan(r['annd'])]
         rand_mpd = [r['mpd'] for r in rand_results if not np.isnan(r['mpd'])]
@@ -324,7 +140,7 @@ def analyse_sampling_compare(result_dir=None):
             except:
                 return np.nan
 
-        row = {
+    row = {
             # 基本信息
             'System': system,
             'Sample_Ratio': sample_ratio,
@@ -332,9 +148,9 @@ def analyse_sampling_compare(result_dir=None):
             'Sampled_Frames': k,
 
             # 采样算法结果
-            'MinD_sampled': minD,
-            'ANND_sampled': annd,
-            'MPD_sampled': mpd,
+            'MinD_sampled': basic.MinD,
+            'ANND_sampled': basic.ANND,
+            'MPD_sampled': basic.MPD,
             'Diversity_Score_sampled': sampled_diversity['diversity_score'],
             'Coverage_Ratio_sampled': sampled_diversity['coverage_ratio'],
             'JS_Divergence_sampled': sampled_similarity['js_divergence'],
@@ -357,9 +173,9 @@ def analyse_sampling_compare(result_dir=None):
             'RMSD_random_mean': np.mean(rand_rmsd) if rand_rmsd else np.nan,
 
             # 均匀采样结果
-            'MinD_uniform': minD_uni,
-            'ANND_uniform': annd_uni,
-            'MPD_uniform': mpd_uni,
+            'MinD_uniform': basic_uniform.MinD,
+            'ANND_uniform': basic_uniform.ANND,
+            'MPD_uniform': basic_uniform.MPD,
             'Diversity_Score_uniform': uniform_diversity['diversity_score'],
             'Coverage_Ratio_uniform': uniform_diversity['coverage_ratio'],
             'JS_Divergence_uniform': uniform_similarity['js_divergence'],
@@ -367,8 +183,8 @@ def analyse_sampling_compare(result_dir=None):
             'RMSD_Mean_uniform': uniform_rmsd['rmsd_mean'],
 
             # 改进百分比（相对于随机采样均值）
-            'MinD_improvement_pct': calc_improvement(minD, np.mean(rand_minD) if rand_minD else np.nan, np.std(rand_minD) if len(rand_minD) > 1 else np.nan),
-            'ANND_improvement_pct': calc_improvement(annd, np.mean(rand_annd) if rand_annd else np.nan, np.std(rand_annd) if len(rand_annd) > 1 else np.nan),
+            'MinD_improvement_pct': calc_improvement(basic.MinD, np.mean(rand_minD) if rand_minD else np.nan, np.std(rand_minD) if len(rand_minD) > 1 else np.nan),
+            'ANND_improvement_pct': calc_improvement(basic.ANND, np.mean(rand_annd) if rand_annd else np.nan, np.std(rand_annd) if len(rand_annd) > 1 else np.nan),
             'Diversity_improvement_pct': calc_improvement(
                 sampled_diversity['diversity_score'], np.mean(rand_diversity) if rand_diversity else np.nan, np.std(rand_diversity) if len(rand_diversity) > 1 else np.nan
             ),
@@ -377,8 +193,8 @@ def analyse_sampling_compare(result_dir=None):
             ),
 
             # 统计显著性（p值）
-            'MinD_p_value': calc_significance(minD, rand_minD),
-            'ANND_p_value': calc_significance(annd, rand_annd),
+            'MinD_p_value': calc_significance(basic.MinD, rand_minD),
+            'ANND_p_value': calc_significance(basic.ANND, rand_annd),
             'Diversity_p_value': calc_significance(
                 sampled_diversity['diversity_score'], rand_diversity
             ),
@@ -387,11 +203,11 @@ def analyse_sampling_compare(result_dir=None):
             ),
 
             # 相对于均匀采样的改进
-            'MinD_vs_uniform_pct': calc_improvement(minD, minD_uni, 0),
-            'ANND_vs_uniform_pct': calc_improvement(annd, annd_uni, 0),
+            'MinD_vs_uniform_pct': calc_improvement(basic.MinD, basic_uniform.MinD, 0),
+            'ANND_vs_uniform_pct': calc_improvement(basic.ANND, basic_uniform.ANND, 0),
             'RMSD_vs_uniform_pct': calc_improvement(sampled_rmsd['rmsd_mean'], uniform_rmsd['rmsd_mean'], 0),
         }
-        rows.append(row)
+    rows.append(row)
 
     out_df = pd.DataFrame(rows)
     
