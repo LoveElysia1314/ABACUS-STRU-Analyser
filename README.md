@@ -1,5 +1,5 @@
 
-# ABACUS-STRU-An## 主要特性 | Key Features
+# ABACUS-STRU-Analyser
 
 - ⚡ **构象向量化 / Conformation Vectorization**：基于非氢原子对距离，PCA降维，自动忽略旋转/平移/缩放。
 - 🧮 **PCA降维 / PCA Dimensionality Reduction**：主成分分析空间，所有分析在降维空间进行。
@@ -38,7 +38,10 @@ ABACUS-STRU-Analyser is a high-throughput analysis pipeline for ABACUS MD trajec
 - ⚖️ **采样方法对比 / Sampling Method Comparison**：智能采样、随机采样、均匀采样多方法性能对比。
 - 🚀 **批量并行 / Batch Parallelism**：自动发现多个系统，多进程并行分析。
 - 📁 **参数隔离 / Parameter-Isolated Output**：输出目录自动按参数命名。
-- � **命令行友好 / CLI Friendly**：所有参数支持长短选项。
+- 🔥 **热更新与断点续算 / Hot Update & Resume**：程序中断后自动检测进度并续算，避免重复计算。
+- 💾 **增量保存 / Incremental Saving**：边计算边写入文件，支持实时数据持久化。
+- 🔄 **自动DeepMD导出 / Auto DeepMD Export**：每个体系分析完成后自动导出DeepMD训练数据。
+- 📝 **命令行友好 / CLI Friendly**：所有参数支持长短选项。
 
 ---
 
@@ -64,6 +67,8 @@ python main_abacus_analyser.py -s "/path/to/data" -r 0.05 -p -0.5 -v 0.90 -w 4
 # 相关性分析 / Correlation analysis
 python main_correlation_analyser.py
 ```
+
+**注意**：主分析完成后，每个体系会自动导出DeepMD训练数据到 `deepmd_npy_per_system/` 目录，无需额外配置。
 
 ---
 
@@ -107,10 +112,15 @@ analysis_results/
     ├── mean_structures/
     │   ├── index.json
     │   └── mean_structure_*.json
-    └── deepmd_npy/                          # DeepMD数据集 / DeepMD dataset
-        ├── type.raw
-        ├── set.000/
-        └── split_*/                          # 数据集拆分 / Dataset splits
+    └── deepmd_npy_per_system/               # DeepMD数据集（按体系） / DeepMD dataset (per-system)
+        ├── system_name_1/
+        │   ├── type.raw
+        │   ├── set.000/
+        │   └── split_*/                      # 数据集拆分 / Dataset splits
+        └── system_name_2/
+            ├── type.raw
+            ├── set.000/
+            └── split_*/                      # 数据集拆分 / Dataset splits
 ```
 
 ### 主要输出文件 | Main Output Files
@@ -122,6 +132,8 @@ analysis_results/
 - **sampling_methods_comparison.csv**：采样方法对比汇总 / Sampling comparison (summary)
 - **progress.json**：分析进度跟踪（断点续算） / Analysis progress tracking (resume capability)
 - **mean_structure_*.json**：平均结构数据 / Mean structure data
+- **deepmd_npy_per_system/**：按体系DeepMD数据集目录 / Per-system DeepMD dataset directory
+  - 每个子目录包含单个体系的完整DeepMD数据集 / Each subdirectory contains complete DeepMD dataset for one system
 
 ---
 
@@ -238,6 +250,14 @@ mypy src/
 ## 更新日志 | Changelog
 
 > 主要变更按时间归纳，详见 [Git 提交历史](https://github.com/LoveElysia1314/ABACUS-STRU-Analyser/commits/main)
+
+### 2025-09 (最新)
+- ✨ **DeepMD导出默认化**：将`--export_deepmd_per_system`设为默认行为，每个体系分析完成后自动导出DeepMD数据
+- 🗑️ **参数简化**：移除`--export_deepmd_per_system`、`--deepmd_output_subdir`、`--force_deepmd_overwrite`、`--enable_legacy_global_deepmd_export`参数
+- 🐛 **采样对比修复**：修复采样效果对比脚本标准差计算错误，移除MinD、Diversity_Score、EMD_Distance、Mean_Centroid_Distance指标
+- ⚡ **并行性能优化**：并行分析时将chunksize固定为1，提升多核利用率和负载均衡
+- 🔧 **命令行参数完善**：重构命令行参数，支持体系粒度DeepMD导出与legacy全局导出可选
+- 📦 **包结构更新**：更新`__init__.py`文件，完善包结构
 
 ### 2025-09
 - 🔥 **热更新与断点续算功能**：实现边计算边写入，支持程序中断后自动续算，避免重复计算。
