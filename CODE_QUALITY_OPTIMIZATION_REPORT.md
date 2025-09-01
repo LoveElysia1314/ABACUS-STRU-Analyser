@@ -134,10 +134,11 @@ class DataValidator:
 2. ✅ 替换所有 `print()`
 3. ✅ 统一日志级别配置
 
-### 第三阶段：结构与轨迹分析（当前）
-1. 🚧 抽离结构对齐与 RMSD/RMSF 逻辑
-2. 🚧 移除未使用的冗余采样函数
-3. ⏳ 适配层预案（保留到 Level 4）
+### 第三阶段：结构与轨迹分析（完成）
+1. ✅ 抽离结构对齐与 RMSD/RMSF 逻辑 -> `utils/structural_metrics.py`
+2. ✅ 移除未使用的冗余采样函数 -> 删除 `trajectory_analyser.greedy_max_avg_distance`
+3. ✅ RMSDCalculator 委托到统一模块（保留兼容层）
+4. ⏭️ 适配层（FrameMetrics / DistributionMetrics -> MetricsToolkit 数据类）转移到 Level 4
 
 ### 第四阶段：代码质量提升 (持续)
 1. 🔄 数据验证逻辑统一
@@ -145,8 +146,8 @@ class DataValidator:
 3. 🔄 性能优化
 
 ### 第五阶段：文档和测试 (计划)
-1. 🔄 更新文档
-2. 🔄 完善测试覆盖
+1. 🔄 更新文档（新增结构指标使用示例）
+2. 🔄 完善测试覆盖（添加结构指标与采样质量对比测试）
 3. 🔄 代码审查
 
 ---
