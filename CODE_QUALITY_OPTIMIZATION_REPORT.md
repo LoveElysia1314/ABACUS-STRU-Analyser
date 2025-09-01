@@ -1,60 +1,163 @@
-# ABACUS-STRU-Analyser 代码质量与后续重构路线图（精简版）
+﻿# ABACUS-STRU-Analyser 代码质量与后续重构路线图（精简版）
 
-**版本：** v1.2  
+**版本：** v1.3  
 **日期：** 2025年9月1日  
 **维护者：** GitHub Copilot  
-**当前代码状态：** Level 4 所有既定目标已完成（指标适配、采样后指标剥离、列分组排序、分布相似性接入）。
+**当前代码状态：** Level 4 目标已完成 + “采样结果复用 v1” 已落地（仅跳过采样阶段，其余输出强制重算 & 自动补全缺失文件）。
 
-本版本开始：移除已交付/完成的历史任务条目，只保留“尚未完成 / 新增的演进需求”。
+v1.3 更新要点：
+- 实现：采样复用（基于 `analysis_targets.json` + 源数据哈希），路径归一化 + system_name 回退匹配解决跨目录重用失败。
+- 调整：增量续算路线图，新增 PR0（已完成），其余步骤顺延。
+- 文档：统一成功判定与数据流描述，清理冗余。 
 
 ---
 
-## 🥇 当前最高优先级 (P0) — 续算（增量复用）重构
+## 🥇 当前最高优先级 (P0) — 增量续算重构（进行中）
 
-### 背景
-现有执行模式对长轨迹（帧数大、采样耗时高）每次需全量重新计算：
-- 采样策略执行（Greedy / PowerMean 等）→ 计算量最大
-- 平均构象（Mean Structure）迭代求解 → 次高耗时
-其余统计（MinD / ANND / MPD / PCA / 多样性 / 分布相似性）相对廉价，可在复用基础数据后快速重算。
+### 已完成（PR0：采样复用 v1）
+条件：历史 `analysis_targets.json` 中目标体系存在且哈希匹配 → 跳过采样；仍重新生成全部指标/汇总/对比/相关性输出。若衍生输出缺失或损坏 → 状态回退 pending 自动补写。
 
-### 目标
-若检测到“可续算条件”满足：
-1. 直接从 `single_analysis_results/*.csv` 与 `analysis_targets.json`、以及缓存 JSON 中加载：
-   - 每帧原子坐标向量（或其投影/派生特征）
-   - 已选采样帧列表（sampled_frames）
-   - 平均构象坐标（从 system_metrics_summary.csv 中移出，单独 JSON 缓存）
-2. 跳过重新采样与均值构象迭代；重建 `TrajectoryMetrics` 与后续指标。
-3. 重新执行：PCA / 多样性 / 分布相似性 / 统计聚合 / 报表写出 / 相关性分析 / 采样方法对比。
+### 待实现范围（v2+）
+在采样短路基础上，加入均值构象短路、指标差异补算与多层缓存。
 
-### 成功判定
+### 目标（v2 完成定义）
+1. 可独立短路：采样 / 均值构象 / 高成本分布指标（EMD）。
+2. 指标新增/移除自动检测并最小补算。
+3. 分层缓存：frame_metrics → mean_structure → derived_metrics → correlation。
+4. schema_version + metric_versions 双层版本校验。
+
+### 成功判定 (KPIs)
 | 维度 | 判据 |
 |------|------|
-| 速度 | 同一数据集第二次运行 ≥ 70% 时间缩短 |
-| 正确性 | 与全量重新计算差异 < 1e-8 (核心标量指标) |
-| 鲁棒性 | 缺失或部分损坏缓存时自动回退全量计算 |
+| 性能 | 第二次运行耗时缩短 ≥ 70%（采样+均值均被短路） |
+| 准确 | 与全量模式核心标量差异 < 1e-8 |
+| 鲁棒 | 损坏/不兼容缓存自动回退全量，不中断 |
 
-### 续算判定条件 (ResumeEligibility)
-触发条件全部满足时进入续算模式：
-1. 存在 `single_analysis_results/frame_metrics_*.csv` 且行数 ≥ 目标帧数
-2. 存在 `analysis_targets.json` 且体系集合一致
-3. 存在 对应 `cache/mean_structure_<system>.json`（新建目录）
-4. 采样帧列表可成功解析（Selected=1）且非空
-5. 无“版本不兼容”标记（通过写入缓存 `metadata.version` 匹配当前代码声明）
+### 续算判定条件（目标状态）
+| 级别 | 条件 | 描述 |
+|------|------|------|
+| 采样短路 (已实现) | 哈希匹配 + sampled_frames 可解析 | 跳过采样策略执行 |
+| 均值短路 | mean_structure JSON 维度/帧数/哈希/版本匹配 | 跳过均值迭代 |
+| 指标差异补算 | index.json 存在指标版本映射 | 仅补缺失或过期指标 |
 
-### 拟新增/调整输出
-1. `system_metrics_summary.csv` 移除列：`Mean_Structure_Coordinates`
-2. 新增：`mean_structures/mean_structure_<system>.json`
-   ```json
-   {
-     "system": "struct_mol_1028_conf_0_T400K",
-     "num_frames": 5000,
-     "dimension": 3,
-     "mean_structure": [[x,y,z], ...],
-     "version": "ms-v1",
-     "generated_at": "2025-09-01T12:00:00Z"
-   }
-   ```
-3. 新增：`cache/index.json` 维护 { system: { checksum/frame_count/version } }
+### 拟新增 / 调整输出
+1. `system_metrics_summary.csv` 移除 `Mean_Structure_Coordinates` 列。
+2. 新增 `mean_structures/mean_structure_<system>.json`：
+     ```json
+     {
+         "system": "struct_xxx",
+         "num_frames": 5000,
+         "natoms": 2048,
+         "dimension": 3,
+         "mean_structure": [[x,y,z], ...],
+         "version": "ms-v1",
+         "generated_at": "2025-09-01T12:00:00Z"
+     }
+     ```
+3. 新增 `cache/index.json`：{ system: { source_hash, frame_count, natoms, metric_versions:{...}, schema_version } }。
+
+### 计划公共工具 (抽象层)
+| 函数 | 作用 |
+|------|------|
+| detect_resume_state(output_dir) -> Dict[str, ResumeState] | 聚合可短路组件判定 |
+| load_mean_structure(system) | 读取 + 校验 mean JSON |
+| parse_sampled_frames(csv) | 提取采样帧索引序列 |
+| reconstruct_metrics_from_sampling(...) | 构建最小 metrics 骨架 |
+| compute_remaining_metrics(...) | 差异检测后补算 |
+| export_mean_structure_json(...) | 输出/覆盖均值缓存 |
+| validate_cache_meta(meta) | 统一版本/哈希/维度校验 |
+
+### 数据流（目标 v2）
+1. 解析 analysis_targets.json → sampled_frames, source_hash。
+2. 尝试加载 mean_structure 缓存（可选）。
+3. 重建基础 metrics（惰性帧数据访问）。
+4. 差异检测 → 生成需补算指标列表。
+5. 补算并写出所有产物（刷新时间戳）。
+
+### 回退策略
+任一层缓存缺失/不兼容 → WARN & 回退全量；全量成功后刷新缓存层。
+
+### 迭代拆分（更新后）
+| 顺序 | 名称 | 内容 | 产出 |
+|------|------|------|------|
+| PR0 (Done) | 采样复用 v1 | hash + name fallback | 采样短路 |
+| PR1 | 均值结构迁移 | CSV 列移除 + JSON 输出 | mean JSON |
+| PR2 | resume_utils & index | 检测+元数据骨架 | index.json |
+| PR3 | 均值短路实现 | 参数 `--enable-resume` 控制 | 均值短路 |
+| PR4 | 差异补算 & 校验 | metric_versions + A/B diff | 局部补算框架 |
+| PR5 | 全指标比较/相关性扩展 | 指标全集覆盖 | 扩展报表 |
+
+### 风险 & 缓解
+| 风险 | 说明 | 缓解 |
+|------|------|------|
+| 缓存腐坏 | JSON/CSV 损坏 | 严格校验 + 自动回退 |
+| 逻辑漂移 | 指标新增未捕获 | 版本映射 + 差异检测 |
+| IO 过大 | 反复加载大帧数据 | 惰性/分块加载 |
+| 误命中 | 非同源数据被短路 | 哈希+版本双校验 |
+
+---
+
+## � 中优先级 (P1) — 仍待处理事项
+1. DataValidator：统一空/NaN/维度不符检查。
+2. constants.py：列名、schema_version、metric_versions 常量集中。
+3. 指标开关：配置禁用 EMD / PCA 等高成本指标。
+4. CSV schema 校验：启动校验列集合与顺序。
+
+---
+
+## 🟢 低优先级 (P2) — 优化 / 增强
+1. mypy 类型基线。
+2. NumPy 风格 docstrings 统一。
+3. 性能微调（向量化 / 缓冲复用 / 可选近似 EMD）。
+4. run_metadata.json：参数、随机种子、git commit 追踪。
+
+---
+
+## 🔄 采样方法对比与相关性分析扩展
+目标：comparison CSV 与 system_metrics_summary 指标全集对齐；相关性分析覆盖全部数值型指标（排除高维数组）。
+新增函数：collect_system_metrics_for_sampling / export_sampling_comparison / correlation_on_metrics。
+
+---
+
+## � 精简路线图（概览）
+| 阶段 | 名称 | 状态 | 说明 |
+|------|------|------|------|
+| 已完成 | Level 1-4 | ✅ | 基础重构阶段 |
+| P0-PR0 | 采样复用 v1 | ✅ | 跳过采样，其他重算 |
+| P0-PR1 | 均值结构迁移 | 待开始 | JSON 输出 / CSV 精简 |
+| P0-PR2 | resume_utils & index | 待开始 | 检测 & 元数据骨架 |
+| P0-PR3 | 均值短路 | 待开始 | 需参数控制 |
+| P0-PR4 | 差异补算 & 校验 | 待开始 | A/B diff 工具 |
+| P0-PR5 | 全指标对比/相关性 | 待开始 | 指标统一收集层 |
+| P1 | 数据验证 & 开关 | 排队 | 与 P0 后期并行 |
+| P2 | 风格 / 类型 / 再现性 | 排队 | 低风险穿插 |
+
+---
+
+## ✅ 已完成（摘要）
+- 采样结果复用 v1（哈希 + system_name 回退）
+- 自动补写缺失输出（复用模式）
+- 采样后指标剥离 & 主 CSV 指标归一
+- 分布相似性 (JS / EMD) 与多样性指标整合
+- 日志标准化与输出排序
+- 采样/结构逻辑抽离
+
+---
+
+## � 下一步立即行动（聚焦 PR1）
+1. result_saver: 添加 export_mean_structure_json() 并移除 CSV 中均值坐标列。
+2. TrajectoryMetrics: 增加 mean_structure_cached 字段。
+3. utils/resume_utils.py 骨架：detect_resume_state / load_mean_structure 占位。
+4. constants.py: 定义 SCHEMA_VERSION / METRIC_VERSION 占位常量。
+5. 日志增强：复用时输出匹配模式 + 哈希前后 8 位。
+
+---
+
+## 文档版本
+- v1.0 (2025-08-31): 初始版本
+- v1.1 (2025-09-01): 阶段性重构明细（至 Level 4）
+- v1.2 (2025-09-01): 精简路线 + 增量续算规划
+- v1.3 (2025-09-01): 采样复用 v1 完成，路线图重排序
 
 ### 拟新增公共工具方法 (抽象层)
 | 方法 | 位置建议 | 功能 |
@@ -80,77 +183,6 @@
 ### 迭代拆分（建议执行次序）
 1. (PR1) 结构调整：移除 CSV 中 `Mean_Structure_Coordinates` 列 & 新增 JSON 导出
 2. (PR2) 新增 `resume_utils` + 判定逻辑（检测 + 日志输出试运行，不启用短路）
-3. (PR3) 启用真正短路：跳过采样与均值计算（加运行参数 `--enable-resume` 防止误触）
-4. (PR4) 增加校验/版本元数据与回退测试
-5. (PR5) 采样方法对比 & 相关性分析扩展到使用“所有 system_metrics_summary 指标”
-
-### 风险 & 缓解
-| 风险 | 说明 | 缓解 |
-|------|------|------|
-| 缓存腐坏 | JSON/CSV 部分丢失 | 校验 + 回退全量 + 记录warning |
-| 指标回归 | 缓存模式与全量差异 | 添加 A/B 校验脚本：运行双模式 diff |
-| 版本漂移 | 字段变化导致误续算 | `metadata.schema_version` 强校验 |
-
----
-
-## � 中优先级 (P1) — 仍待处理事项
-
-1. 数据验证与清洗统一：扩展 `data_utils` 提供 `DataValidator`（数组空/NaN/统计安全包装）。
-2. 常量与枚举集中：建立 `utils/constants.py`（列名、阈值、版本号、特征开关）。
-3. 指标开关机制：允许通过配置禁用高成本指标（EMD / PCA），减少首次全量时间。
-4. 报表列自动校验：运行时对 `system_metrics_summary.csv` 头部进行 schema 校验（防漂移）。
-
----
-
-## 🟢 低优先级 (P2) — 优化 / 增强
-
-1. 类型注解补全 & mypy 校验基线。
-2. 文档字符串统一（NumPy 风格）。
-3. 计算性能微优化（向量化 / 临时数组重用 / EMD 可选快速近似）。
-4. 结果再现性：在根目录生成 `run_metadata.json`（参数、种子、git commit）。
-
----
-
-## 🔄 采样方法对比与相关性分析扩展
-
-### 现状
-`sampling_methods_comparison.csv` 当前不含全部结构/分布指标；相关性分析部分字段缺失。
-
-### 目标
-1. 采样方法对比文件包含：与 `system_metrics_summary.csv` 完全一致的指标集合（除系统基础标识外可另设第一列描述采样策略）。
-2. 相关性分析：对全指标矩阵运行（可选参数过滤高维 JSON / 列表字段）。
-
-### 拟公共函数
-| 函数 | 说明 |
-|------|------|
-| `collect_system_metrics_for_sampling(strategies_results)` | 汇总不同策略返回的 `TrajectoryMetrics` 为统一表结构 |
-| `export_sampling_comparison(metrics_table)` | 输出 comparison CSV |
-| `correlation_on_metrics(df, exclude_patterns=None)` | 按需排除列表/JSON列后计算皮尔逊/斯皮尔曼 |
-
----
-
-## � 精简路线图（更新后）
-
-| 阶段 | 名称 | 状态 | 说明 |
-|------|------|------|------|
-| 已完成 | Level 1-4 | ✅ | 不再在文档中展开 |
-| P0-PR1 | 均值结构迁移 & 列精简 | 待开始 | JSON 输出 / CSV 列更新 |
-| P0-PR2 | 续算检测 | 待开始 | 仅检测 + 日志 |
-| P0-PR3 | 跳过采样/均值 | 待开始 | 增参 `--enable-resume` |
-| P0-PR4 | 校验与回退 | 待开始 | A/B diff 工具 |
-| P0-PR5 | 采样对比 & 全指标相关性 | 待开始 | 指标收集公共层 |
-| P1 | 数据验证 & 配置化开关 | 排队 | 与 P0 可并行晚期插入 |
-| P2 | 风格 / 类型 / 再现性元数据 | 排队 | 低风险穿插 |
-
----
-
-## ✅ 已完成（仅列举，不再维护详细条目）
-- 重复结构/采样逻辑抽离与统一
-- 日志标准化 & 输出分组排序
-- 分布相似性（JS / EMD）与多样性指标并入主流程
-- 采样后指标剥离，主 CSV 仅保留全集指标
-
----
 
 ## � 下一步立即行动建议
 1. 执行 PR1：修改 `result_saver` 移除均值坐标列；新增 JSON 导出函数框架（空实现返回占位）。
