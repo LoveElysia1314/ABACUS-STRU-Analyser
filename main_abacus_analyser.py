@@ -158,6 +158,9 @@ class MainApp:
 
     def _execute_analysis_workflow(self, args, start_time):
         """执行主要的分析工作流程"""
+        # Store args for per-system deepmd export access
+        self.args = args
+        
         # 步骤1: 查找和管理系统目录
         search_paths = self._resolve_search_paths(args.search_path)
         mol_systems = self._discover_systems_from_paths(search_paths, args.include_project)
@@ -175,6 +178,8 @@ class MainApp:
 
         path_manager = PathManager(args.output_dir)
         actual_output_dir = path_manager.set_output_dir_for_params(current_analysis_params)
+        # Store for per-system deepmd export access
+        self.current_output_dir = actual_output_dir
         self.logger.info(f"使用参数专用目录: {actual_output_dir}")
         
         # 检查是否已有完整结果（快速路径）
@@ -315,21 +320,21 @@ class MainApp:
             self.logger.error(f"保存分析目标失败: {str(e)}")
         
         self._output_final_statistics(analysis_results, start_time, actual_output_dir, path_manager)
-
-        # 步骤7: 导出deepmd采样帧数据集
-        try:
-            from src.io.sampled_frames_to_deepmd import export_sampled_frames_to_deepmd
-            self.logger.info("开始导出采样帧为deepmd数据集...")
-            export_sampled_frames_to_deepmd(
-                run_dir=actual_output_dir,
-                output_dir=os.path.join(actual_output_dir, "deepmd_npy"),
-                split_ratio=[0.8, 0.2],
-                logger=self.logger,
-                force_reexport=args.force_recompute  # 如果强制重新计算，也重新导出deepmd数据
-            )
-            self.logger.info("采样帧deepmd数据集导出完成")
-        except Exception as e:
-            self.logger.error(f"采样帧deepmd数据集导出失败: {e}")
+        # 可选：仅在未启用 per-system 导出且显式要求 legacy 才执行全局合并导出
+        if (not getattr(args, 'export_deepmd_per_system', False)) and getattr(args, 'enable_legacy_global_deepmd_export', False):
+            try:
+                from src.io.sampled_frames_to_deepmd import export_sampled_frames_to_deepmd
+                self.logger.info("[legacy] 开始执行全局 MultiSystems deepmd 导出 (无 per-system 导出配置)...")
+                export_sampled_frames_to_deepmd(
+                    run_dir=actual_output_dir,
+                    output_dir=os.path.join(actual_output_dir, "deepmd_npy"),
+                    split_ratio=[0.8, 0.2],
+                    logger=self.logger,
+                    force_reexport=args.force_recompute
+                )
+                self.logger.info("[legacy] 全局 deepmd 导出完成")
+            except Exception as e:
+                self.logger.error(f"[legacy] 全局 deepmd 导出失败: {e}")
     
     def _parse_arguments(self) -> argparse.Namespace:
         """解析命令行参数"""
@@ -344,6 +349,10 @@ class MainApp:
         parser.add_argument('-f', '--force_recompute', action='store_true', help='强制重新计算所有系统，忽略已有的分析结果')
         parser.add_argument('--dry_run_reuse', action='store_true', help='仅评估采样复用计划并输出 sampling_reuse_plan.json 后退出')
         parser.add_argument('--disable_sampling_eval', dest='enable_sampling_eval', action='store_false', help='禁用采样效果评估 (默认开启)')
+        parser.add_argument('--export_deepmd_per_system', action='store_true', help='按体系粒度分析完成后立即导出 deepmd npy')
+        parser.add_argument('--deepmd_output_subdir', type=str, default='deepmd_npy_per_system', help='按体系导出的 deepmd npy 根子目录名')
+        parser.add_argument('--force_deepmd_overwrite', action='store_true', help='强制覆盖已有 per-system deepmd 导出目录')
+        parser.add_argument('--enable_legacy_global_deepmd_export', action='store_true', help='启用旧的全局合并 deepmd 导出逻辑（默认关闭）')
         return parser.parse_args()
     
     def _determine_workers(self, workers_arg: int) -> int:
@@ -441,6 +450,24 @@ class MainApp:
                             pass
                         analysis_results.append(result)
                         self.logger.info(f"分析完成 (已完成 {len(analysis_results)}/{len(system_paths)}): {getattr(result[0], 'system_name', system_path)}")
+                        # 即时 per-system deepmd 导出（若开启选项）
+                        if getattr(self.args, 'export_deepmd_per_system', False) and system_path:
+                            try:
+                                from src.io.deepmd_exporter import export_sampled_frames_per_system
+                                metrics = result[0]
+                                frames = result[1]
+                                out_root = os.path.join(self.current_output_dir, getattr(self.args, 'deepmd_output_subdir', 'deepmd_npy_per_system'))
+                                export_sampled_frames_per_system(
+                                    frames=frames,
+                                    sampled_frame_ids=getattr(metrics, 'sampled_frames', []) or [],
+                                    system_path=system_path,
+                                    output_root=out_root,
+                                    system_name=getattr(metrics, 'system_name', os.path.basename(system_path.rstrip('/\\'))),
+                                    logger=self.logger,
+                                    force=getattr(self.args, 'force_deepmd_overwrite', False)
+                                )
+                            except Exception as de:
+                                self.logger.warning(f"体系 {system_path} deepmd 导出失败(忽略): {de}")
                     else:
                         # Unknown which path failed; best-effort mark if we can
                         self.logger.warning("并行分析返回空结果，标记为失败")
@@ -474,6 +501,24 @@ class MainApp:
                     analysis_results.append(result)
                     mode = "复用采样" if pre_frames else "重新采样"
                     self.logger.info(f"分析完成 ({i+1}/{len(system_paths)}): {result[0].system_name} [{mode}]")
+                    # 即时 per-system deepmd 导出
+                    if getattr(self.args, 'export_deepmd_per_system', False):
+                        try:
+                            from src.io.deepmd_exporter import export_sampled_frames_per_system
+                            metrics = result[0]
+                            frames = result[1]
+                            out_root = os.path.join(self.current_output_dir, getattr(self.args, 'deepmd_output_subdir', 'deepmd_npy_per_system'))
+                            export_sampled_frames_per_system(
+                                frames=frames,
+                                sampled_frame_ids=getattr(metrics, 'sampled_frames', []) or [],
+                                system_path=system_path,
+                                output_root=out_root,
+                                system_name=getattr(metrics, 'system_name', os.path.basename(system_path.rstrip('/\\'))),
+                                logger=self.logger,
+                                force=getattr(self.args, 'force_deepmd_overwrite', False)
+                            )
+                        except Exception as de:
+                            self.logger.warning(f"体系 {system_path} deepmd 导出失败(忽略): {de}")
                 else:
                     self.logger.warning(f"分析失败 ({i+1}/{len(system_paths)}): {system_path}")
             except Exception as e:

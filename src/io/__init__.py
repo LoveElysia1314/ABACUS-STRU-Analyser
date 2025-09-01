@@ -7,4 +7,5 @@ from .path_manager import PathManager
 from .result_saver import ResultSaver
 from .stru_parser import StrUParser
 
-__all__ = ['sampled_frames_to_deepmd', 'PathManager', 'ResultSaver', 'StrUParser']
+# 移除旧的 sampled_frames_to_deepmd 聚合导出脚本；按体系导出由 deepmd_exporter 提供
+__all__ = ['PathManager', 'ResultSaver', 'StrUParser']
