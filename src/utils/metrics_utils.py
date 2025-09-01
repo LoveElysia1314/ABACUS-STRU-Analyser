@@ -215,6 +215,31 @@ class MetricsToolkit:
             "num_frames": int(vectors.shape[0]) if hasattr(vectors, 'shape') else 0,
             "dimension": int(vectors.shape[1]) if hasattr(vectors, 'shape') and vectors.ndim == 2 else 0,
         }
+    @staticmethod
+    def adapt_sampling_metrics(selected_vectors: np.ndarray, full_vectors: np.ndarray, rmsd_values: np.ndarray | List[float] | None = None) -> Dict[str, Any]:
+        """Convenience wrapper for sampling comparison.
+
+        Returns a unified dict with canonical keys aligned to system summary headers.
+        """
+        try:
+            basic = MetricsToolkit.compute_basic_distance_metrics(selected_vectors)
+            diversity = MetricsToolkit.compute_diversity_metrics(selected_vectors)
+            similarity = MetricsToolkit.compute_distribution_similarity(selected_vectors, full_vectors)
+            rmsd_summary = MetricsToolkit.summarize_rmsd(rmsd_values if rmsd_values is not None else [])
+            return {
+                "MinD": basic.MinD,
+                "ANND": basic.ANND,
+                "MPD": basic.MPD,
+                "Diversity_Score": diversity.diversity_score,
+                "Coverage_Ratio": diversity.coverage_ratio,
+                "Energy_Range": diversity.energy_range,
+                "JS_Divergence": similarity.js_divergence,
+                "EMD_Distance": similarity.emd_distance,
+                "Mean_Centroid_Distance": similarity.mean_distance,
+                "RMSD_Mean": rmsd_summary.rmsd_mean,
+            }
+        except Exception:
+            return {}
 
 
 # Convenience re-exports for legacy style imports if needed
@@ -222,3 +247,4 @@ compute_basic_distance_metrics = MetricsToolkit.compute_basic_distance_metrics
 compute_diversity_metrics = MetricsToolkit.compute_diversity_metrics
 compute_distribution_similarity = MetricsToolkit.compute_distribution_similarity
 summarize_rmsd = MetricsToolkit.summarize_rmsd
+adapt_sampling_metrics = MetricsToolkit.adapt_sampling_metrics

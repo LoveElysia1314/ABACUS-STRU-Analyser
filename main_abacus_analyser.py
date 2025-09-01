@@ -23,6 +23,14 @@ from src.core.system_analyser import SystemAnalyser, BatchAnalyser
 from src.io.result_saver import ResultSaver
 from src.utils.data_utils import ErrorHandler
 from src.utils.file_utils import FileUtils
+from src.utils.data_utils import ErrorHandler as _Err
+
+# 采样效果评估（采样对比）
+try:
+    from sampling_compare_demo import analyse_sampling_compare as SamplingComparisonRunner
+    SAMPLING_COMPARISON_AVAILABLE = True
+except Exception:
+    SAMPLING_COMPARISON_AVAILABLE = False
 
 try:
     from src.analysis.correlation_analyser import CorrelationAnalyser as ExternalCorrelationAnalyser
@@ -175,6 +183,9 @@ class MainApp:
             # 加载采样帧信息
             path_manager.load_sampled_frames_from_csv()
             self._run_correlation_analysis(actual_output_dir)
+            # 新增：运行采样效果比较（采样 vs 随机 / 均匀）
+            if getattr(args, 'enable_sampling_eval', True):
+                self._run_sampling_evaluation(actual_output_dir)
             return
 
         # 步骤3: 初始化目标管理
@@ -288,6 +299,9 @@ class MainApp:
             
             # 执行相关性分析
             self._run_correlation_analysis(actual_output_dir)
+            # 采样效果评估
+            if getattr(args, 'enable_sampling_eval', True):
+                self._run_sampling_evaluation(actual_output_dir)
         elif len(path_manager.get_targets_by_status("completed")) > 0:
             # 没有新的分析结果，但有已完成的系统
             self.logger.info("所有系统均已完成分析，跳过结果保存")
@@ -295,6 +309,9 @@ class MainApp:
             path_manager.load_sampled_frames_from_csv()
             # 仍然执行相关性分析
             self._run_correlation_analysis(actual_output_dir)
+            # 采样效果评估
+            if getattr(args, 'enable_sampling_eval', True):
+                self._run_sampling_evaluation(actual_output_dir)
         
         # 步骤6: 保存最终状态并输出统计
         self.logger.info("保存分析目标状态...")
@@ -331,6 +348,7 @@ class MainApp:
         parser.add_argument('-i', '--include_project', action='store_true', help='允许搜索项目自身目录（默认屏蔽）')
         parser.add_argument('-f', '--force_recompute', action='store_true', help='强制重新计算所有系统，忽略已有的分析结果')
         parser.add_argument('--dry_run_reuse', action='store_true', help='仅评估采样复用计划并输出 sampling_reuse_plan.json 后退出')
+        parser.add_argument('--disable_sampling_eval', dest='enable_sampling_eval', action='store_false', help='禁用采样效果评估 (默认开启)')
         return parser.parse_args()
     
     def _determine_workers(self, workers_arg: int) -> int:
@@ -505,6 +523,20 @@ class MainApp:
                 self.logger.warning("相关性分析模块不可用，跳过相关性分析")
             else:
                 self.logger.warning(f"系统指标文件不存在，跳过相关性分析: {combined_csv_path}")
+
+    def _run_sampling_evaluation(self, output_dir: str) -> None:
+        """运行采样效果评估，将采样算法与随机/均匀采样在各指标上的表现进行对比。"""
+        if not SAMPLING_COMPARISON_AVAILABLE:
+            self.logger.warning("采样效果评估模块不可用，跳过采样比较")
+            return
+        try:
+            self.logger.info("开始采样效果评估 (采样 vs 随机 / 均匀)...")
+            SamplingComparisonRunner(result_dir=output_dir)
+            self.logger.info("采样效果评估完成: 生成 sampling_compare_enhanced.csv 与 sampling_methods_comparison.csv")
+        except Exception as e:
+            self.logger.error(f"采样效果评估失败: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
     
     def _output_final_statistics(self, analysis_results: List[tuple], start_time: float, 
                                output_dir: str, path_manager: PathManager) -> None:

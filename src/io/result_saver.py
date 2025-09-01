@@ -11,6 +11,11 @@ from ..core.metrics import TrajectoryMetrics
 from ..io.stru_parser import FrameData
 from ..utils import FileUtils
 from ..utils.data_utils import ErrorHandler
+from ..utils.metrics_registry import (
+    SYSTEM_SUMMARY_HEADERS as REGISTRY_SYSTEM_SUMMARY_HEADERS,
+    build_summary_row as build_registry_summary_row,
+    SCHEMA_VERSION as SUMMARY_SCHEMA_VERSION,
+)
 
 
 class ResultSaver:
@@ -22,70 +27,16 @@ class ResultSaver:
     # 1) 基础标识 & 条件 -> 2) 规模/维度 -> 3) 核心结构距离指标 -> 4) 多样性/覆盖/能量 ->
     # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性
     # 注意：原第7组 Mean_Structure_Coordinates 已拆分为独立 JSON 文件导出，列中移除（PR1）。
-    SYSTEM_SUMMARY_HEADERS = [
-        # 1) 基础标识
-        "System", "Molecule_ID", "Configuration", "Temperature(K)",
-        # 2) 规模/维度
-        "Num_Frames", "Dimension",
-        # 3) 核心结构距离指标（全集统计）
-        "RMSD_Mean", "MinD", "ANND", "MPD",
-        # 4) 多样性与覆盖 & 能量范围
-        "Diversity_Score", "Coverage_Ratio", "Energy_Range",
-        # 5) PCA 概览（先数量，再方差占比，再累积，最后数组明细）
-        "PCA_Num_Components_Retained", "PCA_Variance_Ratio", "PCA_Cumulative_Variance_Ratio", "PCA_Variance_Ratios",
-        # 6) 分布 / 采样相似性指标
-        "JS_Divergence", "EMD_Distance", "Mean_Centroid_Distance",
-    ]
+    # 统一来源：metrics_registry.SYSTEM_SUMMARY_HEADERS
+    SYSTEM_SUMMARY_HEADERS = REGISTRY_SYSTEM_SUMMARY_HEADERS
+    SYSTEM_SUMMARY_SCHEMA_VERSION = SUMMARY_SCHEMA_VERSION
 
     SAMPLING_RECORDS_HEADERS = ["System", "System_Path", "Sampled_Frames"]  # Sampled_Frames格式: [1,5,10,15,20]
 
     @staticmethod
     def _format_metric_row(metrics: TrajectoryMetrics) -> List[str]:
-        """格式化统计量行，只包含原参数和采样后参数"""
-        # 基础信息
-        row = [
-            metrics.system_name,
-            metrics.mol_id,
-            metrics.conf,
-            metrics.temperature,
-            metrics.num_frames,
-            metrics.dimension,
-        ]
-
-        # 3) 全集核心结构距离指标
-        row.extend([
-            f"{metrics.rmsd_mean:.6f}",
-            f"{metrics.MinD:.6f}",
-            f"{metrics.ANND:.6f}",
-            f"{metrics.MPD:.6f}",
-        ])
-        import json
-        pca_variance_ratios_str = json.dumps(metrics.pca_explained_variance_ratio, ensure_ascii=False)
-        # Mean structure 不再写入 CSV，改为独立 JSON 文件导出（见 export_mean_structure）。
-
-        # 4) 多样性/覆盖/能量范围
-        row.extend([
-            "" if metrics.diversity_score is None else f"{metrics.diversity_score:.6f}",
-            "" if metrics.coverage_ratio is None else f"{metrics.coverage_ratio:.6f}",
-            "" if metrics.energy_range is None else f"{metrics.energy_range:.6f}",
-        ])
-
-        # 5) PCA 概览（数量 -> 方差 -> 累积 -> 数组）
-        row.extend([
-            f"{int(metrics.pca_components)}",
-            f"{metrics.pca_variance_ratio:.6f}",
-            f"{metrics.pca_cumulative_variance_ratio:.6f}",
-            pca_variance_ratios_str,
-        ])
-
-        # 6) 分布 / 采样相似性
-        row.extend([
-            "" if metrics.js_divergence is None else f"{metrics.js_divergence:.6f}",
-            "" if metrics.emd_distance is None else f"{metrics.emd_distance:.6f}",
-            "" if metrics.mean_centroid_distance is None else f"{metrics.mean_centroid_distance:.6f}",
-        ])
-
-        return row
+        """使用统一 registry 构建行。"""
+        return build_registry_summary_row(metrics)
 
     @staticmethod
     def export_mean_structure(output_dir: str, metrics: TrajectoryMetrics) -> None:

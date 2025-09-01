@@ -19,6 +19,10 @@ from src.utils.metrics_utils import (
     compute_diversity_metrics,
     compute_distribution_similarity,
     summarize_rmsd,
+    adapt_sampling_metrics,
+)
+from src.utils.metrics_registry import (
+    get_headers_by_categories,
 )
 
 def _wrap_diversity(vectors: np.ndarray):
@@ -77,10 +81,11 @@ def analyse_sampling_compare(result_dir=None):
             rmsd_data = pd.to_numeric(df['RMSD'], errors='coerce').values
 
         # 采样算法结果
-        basic = compute_basic_distance_metrics(vectors[selected])
-        sampled_diversity = _wrap_diversity(vectors[selected])
-        sampled_similarity = _wrap_similarity(vectors[selected], vectors)
-        sampled_rmsd = _wrap_rmsd(rmsd_data[selected] if len(rmsd_data) > 0 else [])
+        sampled_metrics = adapt_sampling_metrics(
+            vectors[selected],
+            vectors,
+            rmsd_data[selected] if len(rmsd_data) > 0 else []
+        )
 
         # 随机采样（多次运行）
         rand_results = []
@@ -88,35 +93,44 @@ def analyse_sampling_compare(result_dir=None):
             if k == 0 or n == 0:
                 break
             idx = np.random.choice(n, k, replace=False)
-            b2 = compute_basic_distance_metrics(vectors[idx])
-            div = _wrap_diversity(vectors[idx])
-            sim = _wrap_similarity(vectors[idx], vectors)
-            rmsd_metrics = _wrap_rmsd(rmsd_data[idx] if len(rmsd_data) > 0 else [])
+            sel_metrics = adapt_sampling_metrics(vectors[idx], vectors, rmsd_data[idx] if len(rmsd_data) > 0 else [])
             rand_results.append({
-                'minD': b2.MinD, 'annd': b2.ANND, 'mpd': b2.MPD,
-                'diversity_score': div['diversity_score'],
-                'coverage_ratio': div['coverage_ratio'],
-                'js_divergence': sim['js_divergence'],
-                'emd_distance': sim['emd_distance'],
-                'rmsd_mean': rmsd_metrics['rmsd_mean']
+                'MinD': sel_metrics.get('MinD'),
+                'ANND': sel_metrics.get('ANND'),
+                'MPD': sel_metrics.get('MPD'),
+                'Diversity_Score': sel_metrics.get('Diversity_Score'),
+                'Coverage_Ratio': sel_metrics.get('Coverage_Ratio'),
+                'JS_Divergence': sel_metrics.get('JS_Divergence'),
+                'EMD_Distance': sel_metrics.get('EMD_Distance'),
+                'Mean_Centroid_Distance': sel_metrics.get('Mean_Centroid_Distance'),
+                'RMSD_Mean': sel_metrics.get('RMSD_Mean'),
+                'Energy_Range': sel_metrics.get('Energy_Range'),
             })
 
         # 均匀采样
         idx_uniform = uniform_sample_indices(n, k) if k > 0 else np.array([], dtype=int)
-        basic_uniform = compute_basic_distance_metrics(vectors[idx_uniform]) if k > 0 else compute_basic_distance_metrics(np.empty((0,)))
-        uniform_diversity = _wrap_diversity(vectors[idx_uniform]) if k > 0 else _wrap_diversity(np.empty((0,)))
-        uniform_similarity = _wrap_similarity(vectors[idx_uniform], vectors) if k > 1 else {'js_divergence': np.nan, 'emd_distance': np.nan, 'mean_distance': np.nan}
-        uniform_rmsd = _wrap_rmsd(rmsd_data[idx_uniform] if (k > 0 and len(rmsd_data) > 0) else [])
+        uniform_metrics = adapt_sampling_metrics(
+            vectors[idx_uniform],
+            vectors,
+            rmsd_data[idx_uniform] if (k > 0 and len(rmsd_data) > 0) else []
+        ) if k > 0 else {}
 
         # 统计集合
-        rand_minD = [r['minD'] for r in rand_results if not np.isnan(r['minD'])]
-        rand_annd = [r['annd'] for r in rand_results if not np.isnan(r['annd'])]
-        rand_mpd = [r['mpd'] for r in rand_results if not np.isnan(r['mpd'])]
-        rand_diversity = [r['diversity_score'] for r in rand_results if not np.isnan(r['diversity_score'])]
-        rand_coverage = [r['coverage_ratio'] for r in rand_results if not np.isnan(r['coverage_ratio'])]
-        rand_js = [r['js_divergence'] for r in rand_results if not np.isnan(r['js_divergence'])]
-        rand_emd = [r['emd_distance'] for r in rand_results if not np.isnan(r['emd_distance'])]
-        rand_rmsd = [r['rmsd_mean'] for r in rand_results if not np.isnan(r['rmsd_mean'])]
+        def _collect(key):
+            vals = [r.get(key) for r in rand_results]
+            return [v for v in vals if v is not None and not (isinstance(v, float) and np.isnan(v))]
+
+        # 随机采样集合统计
+        rand_MinD = _collect('MinD')
+        rand_ANND = _collect('ANND')
+        rand_MPD = _collect('MPD')
+        rand_Div = _collect('Diversity_Score')
+        rand_Cov = _collect('Coverage_Ratio')
+        rand_JS = _collect('JS_Divergence')
+        rand_EMD = _collect('EMD_Distance')
+        rand_RMSD = _collect('RMSD_Mean')
+        rand_EnergyRange = _collect('Energy_Range')
+        rand_MeanCentroid = _collect('Mean_Centroid_Distance')
 
         # 计算改进百分比
         def calc_improvement(sample_val, baseline_mean, baseline_std):
@@ -140,73 +154,69 @@ def analyse_sampling_compare(result_dir=None):
             except:
                 return np.nan
 
-    row = {
+        row = {
             # 基本信息
             'System': system,
             'Sample_Ratio': sample_ratio,
             'Total_Frames': n,
             'Sampled_Frames': k,
 
-            # 采样算法结果
-            'MinD_sampled': basic.MinD,
-            'ANND_sampled': basic.ANND,
-            'MPD_sampled': basic.MPD,
-            'Diversity_Score_sampled': sampled_diversity['diversity_score'],
-            'Coverage_Ratio_sampled': sampled_diversity['coverage_ratio'],
-            'JS_Divergence_sampled': sampled_similarity['js_divergence'],
-            'EMD_Distance_sampled': sampled_similarity['emd_distance'],
-            'RMSD_Mean_sampled': sampled_rmsd['rmsd_mean'],
+            # 采样算法结果（统一）
+            'MinD_sampled': sampled_metrics.get('MinD'),
+            'ANND_sampled': sampled_metrics.get('ANND'),
+            'MPD_sampled': sampled_metrics.get('MPD'),
+            'Diversity_Score_sampled': sampled_metrics.get('Diversity_Score'),
+            'Coverage_Ratio_sampled': sampled_metrics.get('Coverage_Ratio'),
+            'Energy_Range_sampled': sampled_metrics.get('Energy_Range'),
+            'JS_Divergence_sampled': sampled_metrics.get('JS_Divergence'),
+            'EMD_Distance_sampled': sampled_metrics.get('EMD_Distance'),
+            'Mean_Centroid_Distance_sampled': sampled_metrics.get('Mean_Centroid_Distance'),
+            'RMSD_Mean_sampled': sampled_metrics.get('RMSD_Mean'),
 
             # 随机采样统计量
-            'MinD_random_mean': np.mean(rand_minD) if rand_minD else np.nan,
-            'MinD_random_std': np.std(rand_minD) if len(rand_minD) > 1 else np.nan,
-            'MinD_random_min': np.min(rand_minD) if rand_minD else np.nan,
-            'MinD_random_max': np.max(rand_minD) if rand_minD else np.nan,
-            'ANND_random_mean': np.mean(rand_annd) if rand_annd else np.nan,
-            'ANND_random_std': np.std(rand_annd) if len(rand_annd) > 1 else np.nan,
-            'MPD_random_mean': np.mean(rand_mpd) if rand_mpd else np.nan,
-            'MPD_random_std': np.std(rand_mpd, ddof=1) if len(rand_mpd) >= 2 else (np.std(rand_mpd, ddof=0) if len(rand_mpd) == 1 else np.nan),
-            'Diversity_random_mean': np.mean(rand_diversity) if rand_diversity else np.nan,
-            'Coverage_random_mean': np.mean(rand_coverage) if rand_coverage else np.nan,
-            'JS_random_mean': np.mean(rand_js) if rand_js else np.nan,
-            'EMD_random_mean': np.mean(rand_emd) if rand_emd else np.nan,
-            'RMSD_random_mean': np.mean(rand_rmsd) if rand_rmsd else np.nan,
+            'MinD_random_mean': np.mean(rand_MinD) if rand_MinD else np.nan,
+            'MinD_random_std': np.std(rand_MinD, ddof=1) if len(rand_MinD) >= 2 else (np.std(rand_MinD, ddof=0) if len(rand_MinD) == 1 else np.nan),
+            'ANND_random_mean': np.mean(rand_ANND) if rand_ANND else np.nan,
+            'ANND_random_std': np.std(rand_ANND, ddof=1) if len(rand_ANND) >= 2 else (np.std(rand_ANND, ddof=0) if len(rand_ANND) == 1 else np.nan),
+            'MPD_random_mean': np.mean(rand_MPD) if rand_MPD else np.nan,
+            'MPD_random_std': np.std(rand_MPD, ddof=1) if len(rand_MPD) >= 2 else (np.std(rand_MPD, ddof=0) if len(rand_MPD) == 1 else np.nan),
+            'Diversity_random_mean': np.mean(rand_Div) if rand_Div else np.nan,
+            'Coverage_random_mean': np.mean(rand_Cov) if rand_Cov else np.nan,
+            'Energy_Range_random_mean': np.mean(rand_EnergyRange) if rand_EnergyRange else np.nan,
+            'JS_random_mean': np.mean(rand_JS) if rand_JS else np.nan,
+            'EMD_random_mean': np.mean(rand_EMD) if rand_EMD else np.nan,
+            'RMSD_random_mean': np.mean(rand_RMSD) if rand_RMSD else np.nan,
+            'Mean_Centroid_Distance_random_mean': np.mean(rand_MeanCentroid) if rand_MeanCentroid else np.nan,
 
             # 均匀采样结果
-            'MinD_uniform': basic_uniform.MinD,
-            'ANND_uniform': basic_uniform.ANND,
-            'MPD_uniform': basic_uniform.MPD,
-            'Diversity_Score_uniform': uniform_diversity['diversity_score'],
-            'Coverage_Ratio_uniform': uniform_diversity['coverage_ratio'],
-            'JS_Divergence_uniform': uniform_similarity['js_divergence'],
-            'EMD_Distance_uniform': uniform_similarity['emd_distance'],
-            'RMSD_Mean_uniform': uniform_rmsd['rmsd_mean'],
+            'MinD_uniform': uniform_metrics.get('MinD'),
+            'ANND_uniform': uniform_metrics.get('ANND'),
+            'MPD_uniform': uniform_metrics.get('MPD'),
+            'Diversity_Score_uniform': uniform_metrics.get('Diversity_Score'),
+            'Coverage_Ratio_uniform': uniform_metrics.get('Coverage_Ratio'),
+            'Energy_Range_uniform': uniform_metrics.get('Energy_Range'),
+            'JS_Divergence_uniform': uniform_metrics.get('JS_Divergence'),
+            'EMD_Distance_uniform': uniform_metrics.get('EMD_Distance'),
+            'Mean_Centroid_Distance_uniform': uniform_metrics.get('Mean_Centroid_Distance'),
+            'RMSD_Mean_uniform': uniform_metrics.get('RMSD_Mean'),
 
             # 改进百分比（相对于随机采样均值）
-            'MinD_improvement_pct': calc_improvement(basic.MinD, np.mean(rand_minD) if rand_minD else np.nan, np.std(rand_minD) if len(rand_minD) > 1 else np.nan),
-            'ANND_improvement_pct': calc_improvement(basic.ANND, np.mean(rand_annd) if rand_annd else np.nan, np.std(rand_annd) if len(rand_annd) > 1 else np.nan),
-            'Diversity_improvement_pct': calc_improvement(
-                sampled_diversity['diversity_score'], np.mean(rand_diversity) if rand_diversity else np.nan, np.std(rand_diversity) if len(rand_diversity) > 1 else np.nan
-            ),
-            'RMSD_improvement_pct': calc_improvement(
-                sampled_rmsd['rmsd_mean'], np.mean(rand_rmsd) if rand_rmsd else np.nan, np.std(rand_rmsd) if len(rand_rmsd) > 1 else np.nan
-            ),
+            'MinD_improvement_pct': calc_improvement(sampled_metrics.get('MinD'), np.mean(rand_MinD) if rand_MinD else np.nan, np.std(rand_MinD) if len(rand_MinD) > 1 else np.nan),
+            'ANND_improvement_pct': calc_improvement(sampled_metrics.get('ANND'), np.mean(rand_ANND) if rand_ANND else np.nan, np.std(rand_ANND) if len(rand_ANND) > 1 else np.nan),
+            'Diversity_improvement_pct': calc_improvement(sampled_metrics.get('Diversity_Score'), np.mean(rand_Div) if rand_Div else np.nan, np.std(rand_Div) if len(rand_Div) > 1 else np.nan),
+            'RMSD_improvement_pct': calc_improvement(sampled_metrics.get('RMSD_Mean'), np.mean(rand_RMSD) if rand_RMSD else np.nan, np.std(rand_RMSD) if len(rand_RMSD) > 1 else np.nan),
 
             # 统计显著性（p值）
-            'MinD_p_value': calc_significance(basic.MinD, rand_minD),
-            'ANND_p_value': calc_significance(basic.ANND, rand_annd),
-            'Diversity_p_value': calc_significance(
-                sampled_diversity['diversity_score'], rand_diversity
-            ),
-            'RMSD_p_value': calc_significance(
-                sampled_rmsd['rmsd_mean'], rand_rmsd
-            ),
+            'MinD_p_value': calc_significance(sampled_metrics.get('MinD'), rand_MinD),
+            'ANND_p_value': calc_significance(sampled_metrics.get('ANND'), rand_ANND),
+            'Diversity_p_value': calc_significance(sampled_metrics.get('Diversity_Score'), rand_Div),
+            'RMSD_p_value': calc_significance(sampled_metrics.get('RMSD_Mean'), rand_RMSD),
 
             # 相对于均匀采样的改进
-            'MinD_vs_uniform_pct': calc_improvement(basic.MinD, basic_uniform.MinD, 0),
-            'ANND_vs_uniform_pct': calc_improvement(basic.ANND, basic_uniform.ANND, 0),
-            'RMSD_vs_uniform_pct': calc_improvement(sampled_rmsd['rmsd_mean'], uniform_rmsd['rmsd_mean'], 0),
-        }
+            'MinD_vs_uniform_pct': calc_improvement(sampled_metrics.get('MinD'), uniform_metrics.get('MinD'), 0),
+            'ANND_vs_uniform_pct': calc_improvement(sampled_metrics.get('ANND'), uniform_metrics.get('ANND'), 0),
+            'RMSD_vs_uniform_pct': calc_improvement(sampled_metrics.get('RMSD_Mean'), uniform_metrics.get('RMSD_Mean'), 0),
+    }
     rows.append(row)
 
     out_df = pd.DataFrame(rows)
@@ -236,23 +246,26 @@ def create_summary_table(rows, result_dir):
         return
     
     # 定义需要汇总的指标
-    metrics_to_summarize = [
-        # 基础距离指标
-        ('MinD', 'MinD_sampled', 'MinD_random_mean', 'MinD_uniform'),
-        ('ANND', 'ANND_sampled', 'ANND_random_mean', 'ANND_uniform'),
-        ('MPD', 'MPD_sampled', 'MPD_random_mean', 'MPD_uniform'),
-        
-        # 多样性指标
-        ('Diversity_Score', 'Diversity_Score_sampled', 'Diversity_random_mean', 'Diversity_Score_uniform'),
-        ('Coverage_Ratio', 'Coverage_Ratio_sampled', 'Coverage_random_mean', 'Coverage_Ratio_uniform'),
-        
-        # 分布相似性指标
-        ('JS_Divergence', 'JS_Divergence_sampled', 'JS_random_mean', 'JS_Divergence_uniform'),
-        ('EMD_Distance', 'EMD_Distance_sampled', 'EMD_random_mean', 'EMD_Distance_uniform'),
-        
-        # RMSD指标
-        ('RMSD_Mean', 'RMSD_Mean_sampled', 'RMSD_random_mean', 'RMSD_Mean_uniform'),
-    ]
+    # 根据注册表动态获取需要 summarization 的指标（排除非 summary 列，如能量范围暂不在采样比较中出现的 random/uniform 版本）
+    base_metrics = get_headers_by_categories(["core_distance", "diversity", "distribution"])
+    # 手动附加 RMSD_Mean（来自 frame 级汇总）
+    ordered = []
+    for name in base_metrics:
+        if name not in ordered:
+            ordered.append(name)
+    if "RMSD_Mean" not in ordered:
+        ordered.insert(0, "RMSD_Mean")  # 保证存在
+    # 构造四元组映射（与现有列命名约定保持一致 *_sampled / *_random_mean / *_uniform）
+    metrics_to_summarize = []
+    for m in ordered:
+        metrics_to_summarize.append(
+            (
+                m,
+                f"{m}_sampled",
+                f"{m.replace('Coverage_Ratio','Coverage').replace('Diversity_Score','Diversity').replace('RMSD_Mean','RMSD').replace('JS_Divergence','JS').replace('EMD_Distance','EMD')}_random_mean",
+                f"{m}_uniform" if m not in ("Coverage_Ratio", "Diversity_Score") else (f"{m.split('_Score')[0]}_Score_uniform" if m.startswith('Diversity') else f"{m}_uniform")
+            )
+        )
     
     logger.info(f"开始处理 {len(rows)} 个系统的数据...")
     

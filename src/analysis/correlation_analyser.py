@@ -60,6 +60,11 @@ from ..utils import (
     MathUtils,
     ValidationUtils,
 )
+from ..utils.metrics_registry import (
+    SYSTEM_SUMMARY_HEADERS as SUMMARY_HEADERS,
+    HEADER_TO_SPEC,
+    get_headers_by_categories,
+)
 
 
 class CorrelationAnalyser:
@@ -73,14 +78,10 @@ class CorrelationAnalyser:
             logger: 日志记录器，如果为None则创建默认日志记录器
         """
         self.logger = logger if logger is not None else self._create_default_logger()
-
-        # 定义分析指标（原参数和采样后参数）
-        self.indicators = [
-            "RMSD_Mean",
-            "MinD",
-            "ANND",
-            "MPD",
-        ]
+        # 统一来源：使用 registry 中核心结构距离 + 多样性 + 分布/采样 相似性 指标。
+        core_cols = get_headers_by_categories(["core_distance", "diversity", "distribution"])  # 保持顺序
+        # 过滤掉非分析需要或数组型字段（当前无数组列; 预留过滤逻辑）
+        self.indicators = [c for c in core_cols]
 
     def _create_default_logger(self) -> logging.Logger:
         """创建默认日志记录器"""
