@@ -85,17 +85,13 @@ REGISTRY: List[MetricSpec] = [
     MetricSpec("dimension", "Dimension", "scale", lambda m: getattr(m, "dimension", None), _int),
     # core distance
     MetricSpec("rmsd_mean", "RMSD_Mean", "core_distance", lambda m: getattr(m, "rmsd_mean", None), _float6),
-    MetricSpec("MinD", "MinD", "core_distance", lambda m: getattr(m, "MinD", None), _float6),
     MetricSpec("ANND", "ANND", "core_distance", lambda m: getattr(m, "ANND", None), _float6),
     MetricSpec("MPD", "MPD", "core_distance", lambda m: getattr(m, "MPD", None), _float6),
     # diversity & energy
-    MetricSpec("diversity_score", "Diversity_Score", "diversity", lambda m: getattr(m, "diversity_score", None), _float6),
     MetricSpec("coverage_ratio", "Coverage_Ratio", "diversity", lambda m: getattr(m, "coverage_ratio", None), _float6),
     MetricSpec("energy_range", "Energy_Range", "diversity", lambda m: getattr(m, "energy_range", None), _float6),
     # distribution similarity (order swapped before PCA)
     MetricSpec("js_divergence", "JS_Divergence", "distribution", lambda m: getattr(m, "js_divergence", None), _float6),
-    MetricSpec("emd_distance", "EMD_Distance", "distribution", lambda m: getattr(m, "emd_distance", None), _float6),
-    MetricSpec("mean_centroid_distance", "Mean_Centroid_Distance", "distribution", lambda m: getattr(m, "mean_centroid_distance", None), _float6),
     # PCA
     MetricSpec("pca_components", "PCA_Num_Components_Retained", "pca", lambda m: getattr(m, "pca_components", None), _int),
     MetricSpec("pca_variance_ratio", "PCA_Variance_Ratio", "pca", lambda m: getattr(m, "pca_variance_ratio", None), _float6),

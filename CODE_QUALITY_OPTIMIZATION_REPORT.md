@@ -177,7 +177,7 @@ v1.3 更新要点：
 1. 读取 frame_metrics CSV → 采样帧集合 + 每帧能量（可选）
 2. 读取 mean_structure JSON → ndarray(mean)
 3. 加载原始帧源数据（必要时只加载用于补算的最小数据：坐标矩阵/能量数组）
-4. 重建 metrics → 执行补算 (PCA、多样性、JS/EMD、MinD/ANND/MPD 若未缓存)
+4. 重建 metrics → 执行补算 (PCA、多样性、JS、ANND/MPD 若未缓存)
 5. 写回 system_metrics_summary（无均值坐标列）+ 采样对比 & 相关性分析
 
 ### 回退策略

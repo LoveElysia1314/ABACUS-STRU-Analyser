@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Unified metrics calculation utilities.
 
-This module consolidates scattered metric computations (MinD, ANND, MPD,
+This module consolidates scattered metric computations (ANND, MPD,
 RMSD summary, diversity metrics, distribution similarity) into a single
 reusable toolkit to reduce duplication across scripts and analysis modules.
 
@@ -29,14 +29,12 @@ from . import ValidationUtils
 
 @dataclass
 class BasicDistanceMetrics:
-    MinD: float
     ANND: float
     MPD: float
 
 
 @dataclass
 class DiversityMetrics:
-    diversity_score: float
     coverage_ratio: float
     pca_variance_ratio: float
     energy_range: float
@@ -45,8 +43,6 @@ class DiversityMetrics:
 @dataclass
 class DistributionSimilarity:
     js_divergence: float
-    emd_distance: float
-    mean_distance: float
 
 
 @dataclass
@@ -64,49 +60,32 @@ class MetricsToolkit:
     @staticmethod
     def compute_basic_distance_metrics(vectors: np.ndarray) -> BasicDistanceMetrics:
         if vectors is None or len(vectors) < 2:
-            return BasicDistanceMetrics(np.nan, np.nan, np.nan)
+            return BasicDistanceMetrics(np.nan, np.nan)
         try:
             # Reuse logic similar to sampling_compare_demo but centralized
             dists = squareform(pdist(vectors, metric="euclidean"))
             np.fill_diagonal(dists, np.inf)
             valid = dists[dists != np.inf]
             if len(valid) == 0:
-                return BasicDistanceMetrics(np.nan, np.nan, np.nan)
-            min_d = float(np.min(valid)) if len(valid) else np.nan
+                return BasicDistanceMetrics(np.nan, np.nan)
             annd = float(np.mean(np.min(dists, axis=1))) if np.any(np.isfinite(np.min(dists, axis=1))) else np.nan
             mpd = float(np.mean(valid)) if len(valid) else np.nan
-            return BasicDistanceMetrics(min_d, annd, mpd)
+            return BasicDistanceMetrics(annd, mpd)
         except Exception:
-            return BasicDistanceMetrics(np.nan, np.nan, np.nan)
+            return BasicDistanceMetrics(np.nan, np.nan)
 
     # ---- Diversity metrics ----
     @staticmethod
     def compute_diversity_metrics(vectors: np.ndarray) -> DiversityMetrics:
         if vectors is None or len(vectors) < 2:
-            return DiversityMetrics(np.nan, np.nan, np.nan, np.nan)
+            return DiversityMetrics(np.nan, np.nan, np.nan)
         # Drop rows with any NaN
         if np.any(np.isnan(vectors)):
             mask = ~np.any(np.isnan(vectors), axis=1)
             vectors = vectors[mask]
             if len(vectors) < 2:
-                return DiversityMetrics(np.nan, np.nan, np.nan, np.nan)
+                return DiversityMetrics(np.nan, np.nan, np.nan)
         try:
-            dists = squareform(pdist(vectors, metric="euclidean"))
-            np.fill_diagonal(dists, np.inf)
-            if np.all(np.isinf(dists)) or np.any(np.isnan(dists)):
-                return DiversityMetrics(np.nan, np.nan, np.nan, np.nan)
-            max_dist = np.max(dists[dists != np.inf])
-            if np.isnan(max_dist) or max_dist == 0:
-                d_norm = dists
-            else:
-                d_norm = dists / max_dist
-            dist_flat = d_norm[d_norm != np.inf]
-            dist_flat = dist_flat[~np.isnan(dist_flat)]
-            if len(dist_flat) == 0:
-                diversity_score = np.nan
-            else:
-                hist, _ = np.histogram(dist_flat, bins=20, density=True)
-                diversity_score = float(entropy(hist + 1e-10))
             # PCA coverage
             try:
                 pca = PCA(n_components=min(3, vectors.shape[1]))
@@ -123,22 +102,22 @@ class MetricsToolkit:
                 energy_col = vectors[:, 0]
                 if not np.all(np.isnan(energy_col)):
                     energy_range = float(np.ptp(energy_col[~np.isnan(energy_col)]))
-            return DiversityMetrics(diversity_score, coverage_ratio, pca_variance_ratio, energy_range)
+            return DiversityMetrics(coverage_ratio, pca_variance_ratio, energy_range)
         except Exception:
-            return DiversityMetrics(np.nan, np.nan, np.nan, np.nan)
+            return DiversityMetrics(np.nan, np.nan, np.nan)
 
     # ---- Distribution similarity ----
     @staticmethod
     def compute_distribution_similarity(sample_vectors: np.ndarray, full_vectors: np.ndarray) -> DistributionSimilarity:
         if sample_vectors is None or full_vectors is None or len(sample_vectors) < 2 or len(full_vectors) < 2:
-            return DistributionSimilarity(np.nan, np.nan, np.nan)
+            return DistributionSimilarity(np.nan)
         # Clean NaNs
         if np.any(np.isnan(sample_vectors)):
             sample_vectors = sample_vectors[~np.any(np.isnan(sample_vectors), axis=1)]
         if np.any(np.isnan(full_vectors)):
             full_vectors = full_vectors[~np.any(np.isnan(full_vectors), axis=1)]
         if len(sample_vectors) < 2 or len(full_vectors) < 2:
-            return DistributionSimilarity(np.nan, np.nan, np.nan)
+            return DistributionSimilarity(np.nan)
         try:
             pca = PCA(n_components=min(3, sample_vectors.shape[1]))
             sample_pca = pca.fit_transform(sample_vectors)
@@ -153,19 +132,9 @@ class MetricsToolkit:
                 js = 0.5 * (entropy(s_hist + 1e-10, m + 1e-10) + entropy(f_hist + 1e-10, m + 1e-10))
                 js_components.append(js)
             js_divergence = float(np.mean(js_components))
-            emd_vals = []
-            for i in range(min(3, sample_pca.shape[1])):
-                try:
-                    emd_vals.append(wasserstein_distance(sample_pca[:, i], full_pca[:, i]))
-                except Exception:
-                    emd_vals.append(np.nan)
-            emd_distance = float(np.nanmean(emd_vals))
-            sample_centroid = np.mean(sample_vectors, axis=0)
-            full_centroid = np.mean(full_vectors, axis=0)
-            mean_distance = float(np.linalg.norm(sample_centroid - full_centroid))
-            return DistributionSimilarity(js_divergence, emd_distance, mean_distance)
+            return DistributionSimilarity(js_divergence)
         except Exception:
-            return DistributionSimilarity(np.nan, np.nan, np.nan)
+            return DistributionSimilarity(np.nan)
 
     # ---- RMSD summary ----
     @staticmethod
@@ -196,7 +165,7 @@ class MetricsToolkit:
             try:
                 results.append(MetricsToolkit.compute_basic_distance_metrics(vectors))
             except Exception:
-                results.append(BasicDistanceMetrics(np.nan, np.nan, np.nan))
+                results.append(BasicDistanceMetrics(np.nan, np.nan))
         return results
 
     @staticmethod
@@ -205,10 +174,8 @@ class MetricsToolkit:
         basic = MetricsToolkit.compute_basic_distance_metrics(vectors)
         diversity = MetricsToolkit.compute_diversity_metrics(vectors)
         return {
-            "MinD": basic.MinD,
             "ANND": basic.ANND,
             "MPD": basic.MPD,
-            "diversity_score": diversity.diversity_score,
             "coverage_ratio": diversity.coverage_ratio,
             "pca_variance_ratio": diversity.pca_variance_ratio,
             "energy_range": diversity.energy_range,
@@ -227,15 +194,11 @@ class MetricsToolkit:
             similarity = MetricsToolkit.compute_distribution_similarity(selected_vectors, full_vectors)
             rmsd_summary = MetricsToolkit.summarize_rmsd(rmsd_values if rmsd_values is not None else [])
             return {
-                "MinD": basic.MinD,
                 "ANND": basic.ANND,
                 "MPD": basic.MPD,
-                "Diversity_Score": diversity.diversity_score,
                 "Coverage_Ratio": diversity.coverage_ratio,
                 "Energy_Range": diversity.energy_range,
                 "JS_Divergence": similarity.js_divergence,
-                "EMD_Distance": similarity.emd_distance,
-                "Mean_Centroid_Distance": similarity.mean_distance,
                 "RMSD_Mean": rmsd_summary.rmsd_mean,
             }
         except Exception:

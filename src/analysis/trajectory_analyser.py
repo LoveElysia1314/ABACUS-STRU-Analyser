@@ -13,10 +13,9 @@
 核心指标（更新版）：
 ------------------
 1. ConfVol: 构象空间体积（核心多样性指标）
-2. MinD: 最小间距（最小距离）
-3. ANND: 平均最近邻距离（平均最近邻距离）
-4. MPD: 平均成对距离（平均成对距离）
-5. PCA explained variance ratios: 主成分方差贡献率
+2. ANND: 平均最近邻距离（平均最近邻距离）
+3. MPD: 平均成对距离（平均成对距离）
+4. PCA explained variance ratios: 主成分方差贡献率
 
 所有输出均为无量纲标准化指标，适用于跨体系比较。
 
@@ -77,9 +76,8 @@ logger = logging.getLogger(__name__)
 class FrameMetrics:
     """单帧的标准化分析指标（更新为新指标）"""
 
-    def __init__(self, frame_id, MinD, ANND, MPD):
+    def __init__(self, frame_id, ANND, MPD):
         self.frame_id = frame_id
-        self.MinD = MinD  # 最小间距
         self.ANND = ANND  # 平均最近邻距离
         self.MPD = MPD  # 平均成对距离
 
@@ -87,10 +85,9 @@ class FrameMetrics:
 class DistributionMetrics:
     """整体分布的标准化分析指标（更新版）"""
 
-    def __init__(self, ConfVol, nAPD, MinD, ANND, MPD, num_frames, dimension, pca_explained_variance_ratio=None):
+    def __init__(self, ConfVol, nAPD, ANND, MPD, num_frames, dimension, pca_explained_variance_ratio=None):
         self.ConfVol = ConfVol  # 标准化构象空间体积
         self.nAPD = nAPD  # 标准化平均成对距离
-        self.MinD = MinD  # 最小间距
         self.ANND = ANND  # 平均最近邻距离
         self.MPD = MPD  # 平均成对距离
         self.num_frames = num_frames
@@ -122,9 +119,7 @@ class SummaryInfo:
         T,
         ConfVol,
         nAPD,
-        MinD,
         ANND,
-        avg_MinD,
         num_frames,
         dimension,
         pca_explained_variance_ratio=None,
@@ -136,9 +131,7 @@ class SummaryInfo:
         self.T = T
         self.ConfVol = ConfVol
         self.nAPD = nAPD
-        self.MinD = MinD
         self.ANND = ANND
-        self.avg_MinD = avg_MinD
         self.num_frames = num_frames
         self.dimension = dimension
         self.pca_explained_variance_ratio = pca_explained_variance_ratio or []

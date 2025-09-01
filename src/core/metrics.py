@@ -30,22 +30,17 @@ class MetricCalculator:
         保持原返回结构向后兼容。
         """
         if ValidationUtils.is_empty(vector_matrix) or getattr(vector_matrix, "shape", [0])[0] < 2:
-            return {"global_mean": 0.0, "MinD": 0.0, "ANND": 0.0, "MPD": 0.0}
+            return {"global_mean": 0.0, "ANND": 0.0, "MPD": 0.0}
 
         global_mean = float(np.mean(vector_matrix))
         basic = compute_basic_distance_metrics(vector_matrix)
         return {
             "global_mean": global_mean,
-            "MinD": basic.MinD,
             "ANND": basic.ANND,
             "MPD": basic.MPD,
         }
 
-    @staticmethod
-    def _calculate_MinD(vector_matrix: np.ndarray) -> float:  # deprecated
-        """(Deprecated) 保留旧接口，内部委托统一工具。"""
-        basic = compute_basic_distance_metrics(vector_matrix)
-        return 0.0 if np.isnan(basic.MinD) else float(basic.MinD)
+
 
     @staticmethod
     def _calculate_ANND(vector_matrix: np.ndarray) -> float:  # deprecated
@@ -98,7 +93,6 @@ class TrajectoryMetrics:
         self.system_path = system_path  # 添加系统路径
         self.num_frames = 0
         self.dimension = 0
-        self.MinD = 0.0
         self.ANND = 0.0
         self.MPD = 0.0
         self.sampled_frames = []
@@ -116,16 +110,12 @@ class TrajectoryMetrics:
         # 平均构象坐标（用于后续构象统一）
         self.mean_structure = None  # 平均构象坐标，numpy数组形状为(n_atoms, 3)
         # Level 4: 多样性 / 分布相似性扩展字段（可选输出）
-        self.diversity_score = None
         self.coverage_ratio = None
         self.energy_range = None
         self.js_divergence = None
-        self.emd_distance = None
-        self.mean_centroid_distance = None
 
     def set_diversity_metrics(self, diversity_obj):  # diversity_obj: DiversityMetrics
         try:
-            self.diversity_score = float(diversity_obj.diversity_score)
             self.coverage_ratio = float(diversity_obj.coverage_ratio)
             self.energy_range = float(diversity_obj.energy_range)
         except Exception:
@@ -134,8 +124,6 @@ class TrajectoryMetrics:
     def set_distribution_similarity(self, sim_obj):  # sim_obj: DistributionSimilarity
         try:
             self.js_divergence = float(sim_obj.js_divergence)
-            self.emd_distance = float(sim_obj.emd_distance)
-            self.mean_centroid_distance = float(sim_obj.mean_distance)
         except Exception:
             pass
 
@@ -147,7 +135,6 @@ class TrajectoryMetrics:
         return ""
 
     def set_original_metrics(self, metrics_data: Dict[str, float]):
-        self.MinD = metrics_data["MinD"]
         self.ANND = metrics_data["ANND"]
         self.MPD = metrics_data["MPD"]
 

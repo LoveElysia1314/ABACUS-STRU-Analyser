@@ -5,7 +5,7 @@
 - 🧮 **PCA降维 / PCA Dimensionality Reduction**：主成分分析空间，所有分析在降维空间进行。
 - 🔬 **多物理量融合 / Multi-Physics Integration**：能量与PCA分量综合向量，信息全面。
 - 🎯 **智能采样 / Intelligent Sampling**：幂平均距离最大化贪心采样算法。
-- 📊 **多样性与分布指标 / Diversity & Distribution Metrics**：MinD、ANND、MPD、RMSD、Diversity Score、Coverage Ratio、JS Divergence、EMD Distance等。
+- 📊 **多样性与分布指标 / Diversity & Distribution Metrics**：ANND、MPD、RMSD、Coverage Ratio、JS Divergence等。
 - 🔗 **相关性分析 / Correlation Analysis**：温度、构象与多样性指标的统计相关性。
 - ⚖️ **采样方法对比 / Sampling Method Comparison**：智能采样、随机采样、均匀采样多方法性能对比。
 - 🚀 **批量并行 / Batch Parallelism**：自动发现多个系统，多进程并行分析。
@@ -33,7 +33,7 @@ ABACUS-STRU-Analyser is a high-throughput analysis pipeline for ABACUS MD trajec
 - 🧮 **PCA降维 / PCA Dimensionality Reduction**：主成分分析空间，所有分析在降维空间进行。
 - 🔬 **多物理量融合 / Multi-Physics Integration**：能量与PCA分量综合向量，信息全面。
 - 🎯 **智能采样 / Intelligent Sampling**：幂平均距离最大化贪心采样算法。
-- 📊 **多样性与分布指标 / Diversity & Distribution Metrics**：MinD、ANND、MPD、RMSD、Diversity Score、Coverage Ratio、JS Divergence、EMD Distance等。
+- 📊 **多样性与分布指标 / Diversity & Distribution Metrics**：ANND、MPD、RMSD、Coverage Ratio、JS Divergence等。
 - 🔗 **相关性分析 / Correlation Analysis**：温度、构象与多样性指标的统计相关性。
 - ⚖️ **采样方法对比 / Sampling Method Comparison**：智能采样、随机采样、均匀采样多方法性能对比。
 - 🚀 **批量并行 / Batch Parallelism**：自动发现多个系统，多进程并行分析。
@@ -128,7 +128,6 @@ analysis_results/
 ## 核心算法 | Core Algorithms
 
 ### 多样性与距离指标 / Diversity & Distance Metrics
-- **MinD**: 最小间距 / Minimum pairwise distance
 - **ANND**: 平均最近邻距离 / Average nearest neighbor distance
 - **MPD**: 平均成对距离 / Mean pairwise distance
 - **RMSD**: 经典均方根偏差，Kabsch对齐 / Root Mean Square Deviation (Kabsch alignment)
@@ -149,7 +148,7 @@ analysis_results/
 - **智能采样**: Power Mean贪心 / Power Mean greedy
 - **随机采样**: 多次随机 / Multiple random trials
 - **均匀采样**: 等间隔 / Uniform interval
-- **评估指标**: MinD, ANND, MPD, Diversity Score, Coverage Ratio, JS Divergence, EMD Distance, RMSD等
+- **评估指标**: ANND, MPD, Coverage Ratio, JS Divergence, RMSD等
 
 ---
 

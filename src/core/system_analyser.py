@@ -236,7 +236,7 @@ class SystemAnalyser:
             diversity_info = MetricsToolkit.compute_diversity_metrics(comprehensive_matrix)
             metrics.set_diversity_metrics(diversity_info)
             logging.getLogger(__name__).debug(
-                f"[Level4] DiversityScore={diversity_info.diversity_score:.4f} Coverage={diversity_info.coverage_ratio:.4f}"
+                f"[Level4] Coverage={diversity_info.coverage_ratio:.4f}"
             )
         except Exception:
             pass
