@@ -429,7 +429,8 @@ class MainApp:
         """并行分析系统（支持采样帧复用）"""
         analysis_results = []
         initializer_args = (analyser.sample_ratio, analyser.power_p, analyser.pca_variance_ratio, reuse_map, self.log_queue)
-        chunksize = max(1, len(system_paths) // (workers * 4)) if system_paths else 1
+        # 优化：将 chunksize 固定为 1，提升并行负载均衡和 CPU 利用率
+        chunksize = 1
 
         with mp.Pool(processes=workers, initializer=_child_init, initargs=initializer_args) as pool:
             try:
