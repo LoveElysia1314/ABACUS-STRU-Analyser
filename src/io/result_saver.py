@@ -37,6 +37,12 @@ class ResultSaver:
         "PCA_Num_Components_Retained",
         "PCA_Variance_Ratios",  # 各主成分方差贡献率（JSON格式）
         "Mean_Structure_Coordinates",  # 平均构象坐标（JSON格式）
+    "Diversity_Score",
+    "Coverage_Ratio",
+    "Energy_Range",
+    "JS_Divergence",
+    "EMD_Distance",
+    "Mean_Centroid_Distance",
     ]
 
     SAMPLING_RECORDS_HEADERS = ["System", "System_Path", "Sampled_Frames"]  # Sampled_Frames格式: [1,5,10,15,20]
@@ -94,6 +100,13 @@ class ResultSaver:
             f"{int(metrics.pca_components)}",
             pca_variance_ratios_str,
             mean_structure_str,
+            # Level 4 扩展：多样性 & 分布相似性（允许None -> 空字符串）
+            "" if metrics.diversity_score is None else f"{metrics.diversity_score:.6f}",
+            "" if metrics.coverage_ratio is None else f"{metrics.coverage_ratio:.6f}",
+            "" if metrics.energy_range is None else f"{metrics.energy_range:.6f}",
+            "" if metrics.js_divergence is None else f"{metrics.js_divergence:.6f}",
+            "" if metrics.emd_distance is None else f"{metrics.emd_distance:.6f}",
+            "" if metrics.mean_centroid_distance is None else f"{metrics.mean_centroid_distance:.6f}",
         ])
 
         return row

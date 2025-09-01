@@ -119,6 +119,29 @@ class TrajectoryMetrics:
         self.energy_available = False  # 是否有能量数据
         # 平均构象坐标（用于后续构象统一）
         self.mean_structure = None  # 平均构象坐标，numpy数组形状为(n_atoms, 3)
+        # Level 4: 多样性 / 分布相似性扩展字段（可选输出）
+        self.diversity_score = None
+        self.coverage_ratio = None
+        self.energy_range = None
+        self.js_divergence = None
+        self.emd_distance = None
+        self.mean_centroid_distance = None
+
+    def set_diversity_metrics(self, diversity_obj):  # diversity_obj: DiversityMetrics
+        try:
+            self.diversity_score = float(diversity_obj.diversity_score)
+            self.coverage_ratio = float(diversity_obj.coverage_ratio)
+            self.energy_range = float(diversity_obj.energy_range)
+        except Exception:
+            pass
+
+    def set_distribution_similarity(self, sim_obj):  # sim_obj: DistributionSimilarity
+        try:
+            self.js_divergence = float(sim_obj.js_divergence)
+            self.emd_distance = float(sim_obj.emd_distance)
+            self.mean_centroid_distance = float(sim_obj.mean_distance)
+        except Exception:
+            pass
 
     @property
     def out_abacus_path(self) -> str:

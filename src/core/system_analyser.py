@@ -24,7 +24,7 @@ from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics
 from .sampler import PowerMeanSampler
 from ..utils.data_utils import ErrorHandler
-from ..utils.metrics_utils import MetricsToolkit  # Level 4 adapters
+from ..utils.metrics_utils import MetricsToolkit, compute_distribution_similarity  # Level 4 adapters
 
 
 class RMSDCalculator:  # 保留兼容入口，内部委托 structural_metrics
@@ -232,11 +232,11 @@ class SystemAnalyser:
 
         # 在综合向量空间中计算指标
         original_metrics = MetricCalculator.compute_all_metrics(comprehensive_matrix)
-        # Level 4: 可选记录多样性与覆盖（暂不改变现有数据结构）
+        # Level 4: 记录多样性与覆盖
         try:
             diversity_info = MetricsToolkit.compute_diversity_metrics(comprehensive_matrix)
-            logger = logging.getLogger(__name__)
-            logger.debug(
+            metrics.set_diversity_metrics(diversity_info)
+            logging.getLogger(__name__).debug(
                 f"[Level4] DiversityScore={diversity_info.diversity_score:.4f} Coverage={diversity_info.coverage_ratio:.4f}"
             )
         except Exception:
@@ -256,6 +256,12 @@ class SystemAnalyser:
             metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
             sampled_vectors = comprehensive_matrix[sampled_indices]
             sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
+            # 采样 vs 全集分布相似性
+            try:
+                sim = compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
+                metrics.set_distribution_similarity(sim)
+            except Exception:
+                pass
             metrics.set_sampled_metrics(sampled_metrics)
 
             # 计算采样后帧的RMSD均值
