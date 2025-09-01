@@ -216,12 +216,9 @@ class MainApp:
             path_manager.check_existing_results()
         else:
             if args.force_recompute:
-                self.logger.info("强制重新计算模式：重置所有系统状态为待处理")
+                self.logger.info("强制重新计算模式：将重新计算所有输出")
             elif not params_compatible and loaded_existing:
-                self.logger.info("参数不兼容：重置所有系统状态为待处理")
-            # 重置所有系统状态为pending
-            for target in path_manager.targets:
-                target.status = "pending"
+                self.logger.info("参数不兼容：将重新计算所有输出")
         
         total_molecules = len(mol_systems)
         total_systems = sum(len(s) for s in mol_systems.values())
@@ -240,16 +237,9 @@ class MainApp:
             pca_variance_ratio=args.pca_variance_ratio
         )
         
-        # 采样复用判定（不改变 completed 判定，只决定是否跳过采样算法）
+        # 采样复用判定（只决定是否跳过采样算法，所有输出都重新计算）
         reuse_map = path_manager.determine_sampling_reuse()
         self.logger.info(f"采样复用判定完成：可复用 {len(reuse_map)} / {len(path_manager.targets)} 个系统的采样帧")
-
-        # 确保复用采样的系统仍被分析（只跳过采样，不跳过其余计算）
-        for t in path_manager.targets:
-            if t.reuse_sampling and t.status == 'completed':
-                # 如果因为旧逻辑被标 completed，但我们只想复用采样，仍需重新计算其它结果
-                t.status = 'pending'
-                self.logger.debug(f"复用采样但强制重算其它结果: {t.system_name}")
 
         # Dry-run: 仅输出复用计划并退出
         if getattr(args, 'dry_run_reuse', False):
@@ -265,11 +255,11 @@ class MainApp:
             self.logger.info(f"Dry-Run 完成：已生成采样复用计划 {plan_path} ，复用 {plan['reused_count']} 个，重采样 {len(plan['resample_systems'])} 个。")
             return
 
-        analysis_targets = path_manager.get_targets_by_status("pending") + path_manager.get_targets_by_status("failed")
+        analysis_targets = path_manager.get_all_targets()
         system_paths = [target.system_path for target in analysis_targets]
-        completed_count = len(path_manager.get_targets_by_status("completed"))
+        completed_count = 0  # 不再区分状态，所有目标都处理
 
-        self.logger.info(f"准备分析 {len(system_paths)} 个系统（已完成: {completed_count}，待处理: {len(system_paths)}）...")
+        self.logger.info(f"准备分析 {len(system_paths)} 个系统（所有输出都重新计算）...")
         
         # 执行分析
         if workers > 1:
@@ -284,13 +274,8 @@ class MainApp:
             self.logger.info("保存分析结果...")
             
             # 判断是否有已完成的系统（增量计算模式）
-            completed_systems = len(path_manager.get_targets_by_status("completed"))
-            is_incremental = completed_systems > 0 and not args.force_recompute
-            
-            if is_incremental:
-                self.logger.info(f"增量计算模式：合并 {len(analysis_results)} 个新结果与 {completed_systems} 个已有结果")
-                
-            # 使用统一的保存接口（incremental 标志决定是否合并已有结果）
+            completed_systems = 0  # 不再区分状态
+            is_incremental = False  # 总是重新计算所有输出            # 使用统一的保存接口（incremental 标志决定是否合并已有结果）
             self.logger.info("保存分析结果（含单体系详细结果与汇总）...")
             ResultSaver.save_results(actual_output_dir, analysis_results, incremental=is_incremental)
             
@@ -298,16 +283,6 @@ class MainApp:
             path_manager.load_sampled_frames_from_csv()
             
             # 执行相关性分析
-            self._run_correlation_analysis(actual_output_dir)
-            # 采样效果评估
-            if getattr(args, 'enable_sampling_eval', True):
-                self._run_sampling_evaluation(actual_output_dir)
-        elif len(path_manager.get_targets_by_status("completed")) > 0:
-            # 没有新的分析结果，但有已完成的系统
-            self.logger.info("所有系统均已完成分析，跳过结果保存")
-            # 加载采样帧信息
-            path_manager.load_sampled_frames_from_csv()
-            # 仍然执行相关性分析
             self._run_correlation_analysis(actual_output_dir)
             # 采样效果评估
             if getattr(args, 'enable_sampling_eval', True):
@@ -442,7 +417,8 @@ class MainApp:
                             system_path = system_paths[i] if i < len(system_paths) else None
 
                         if system_path:
-                            path_manager.update_target_status(system_path, "completed")
+                            # 不再更新状态，所有输出都重新计算
+                            pass
                         analysis_results.append(result)
                         self.logger.info(f"分析完成 (已完成 {len(analysis_results)}/{len(system_paths)}): {getattr(result[0], 'system_name', system_path)}")
                     else:
@@ -472,19 +448,15 @@ class MainApp:
         analysis_results = []
         for i, system_path in enumerate(system_paths):
             try:
-                path_manager.update_target_status(system_path, "processing")
                 pre_frames = path_to_presampled.get(system_path)
                 result = analyser.analyse_system(system_path, pre_sampled_frames=pre_frames)
                 if result:
                     analysis_results.append(result)
-                    path_manager.update_target_status(system_path, "completed")
                     mode = "复用采样" if pre_frames else "重新采样"
                     self.logger.info(f"分析完成 ({i+1}/{len(system_paths)}): {result[0].system_name} [{mode}]")
                 else:
-                    path_manager.update_target_status(system_path, "failed")
                     self.logger.warning(f"分析失败 ({i+1}/{len(system_paths)}): {system_path}")
             except Exception as e:
-                path_manager.update_target_status(system_path, "failed")
                 ErrorHandler.log_detailed_error(
                     self.logger, e, f"处理体系 {system_path} 时出错",
                     additional_info={
@@ -542,23 +514,19 @@ class MainApp:
                                output_dir: str, path_manager: PathManager) -> None:
         """输出最终统计信息"""
         elapsed = time.time() - start_time
-        progress_summary = path_manager.get_progress_summary()
-        
+
         # 计算采样统计
         swap_counts = [result[3] for result in analysis_results]
-        
+
         self.logger.info("=" * 60)
-        self.logger.info(f"分析完成! 处理体系: {len(analysis_results)}/{progress_summary['total']}")
-        self.logger.info(f"状态统计: 完成 {progress_summary['completed']}, "
-                        f"失败 {progress_summary['failed']}, "
-                        f"待处理 {progress_summary['pending']}")
-        
+        self.logger.info(f"分析完成! 处理体系: {len(analysis_results)}/{len(path_manager.targets)}")
+
         if swap_counts:
             import numpy as np
             self.logger.info(f"采样优化统计:")
             self.logger.info(f"  平均交换次数: {np.mean(swap_counts):.2f}")
             self.logger.info(f"  总交换次数: {int(sum(swap_counts))}")
-        
+
         self.logger.info(f"总耗时: {elapsed:.1f}s ({elapsed/60:.1f} 分钟)")
         self.logger.info(f"结果目录: {output_dir}")
         self.logger.info(f"路径信息: {path_manager.targets_file}")

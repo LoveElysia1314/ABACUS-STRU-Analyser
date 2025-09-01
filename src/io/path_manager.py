@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from ..utils.file_utils import FileUtils
 
 
+
 @dataclass
 class AnalysisTarget:
     system_path: str
@@ -20,7 +21,6 @@ class AnalysisTarget:
     temperature: str
     stru_files: List[str]
     creation_time: float
-    status: str = "pending"
     source_hash: str = ""  # 源文件哈希，用于检测源数据变更
     sampled_frames: List[int] = None  # 采样帧编号列表
     reuse_sampling: bool = False  # 是否复用既有采样结果（跳过采样算法）
@@ -179,29 +179,20 @@ class PathManager:
 
             # 检查是否所有系统都已完成
             total_systems = 0
-            completed_systems = 0
 
             for mol_data in data.get("molecules", {}).values():
                 for system_data in mol_data.get("systems", {}).values():
                     total_systems += 1
-                    if system_data.get("status") == "completed":
-                        completed_systems += 1
 
             if total_systems == 0:
                 self.logger.debug("目标文件中没有系统记录")
                 return False
 
-            completion_rate = completed_systems / total_systems
-            if completion_rate == 1.0:
-                self.logger.info(
-                    f"发现完整的分析结果: {completed_systems}/{total_systems} 系统已完成"
-                )
-                return True
-            else:
-                self.logger.info(
-                    f"发现部分完成的分析: {completed_systems}/{total_systems} 系统已完成"
-                )
-                return False
+            # 由于不再使用 status 字段，总是返回 False 表示需要重新计算
+            self.logger.info(
+                f"发现 {total_systems} 个系统记录，将重新计算所有输出"
+            )
+            return False
 
         except Exception as e:
             self.logger.warning(f"检查现有结果时出错: {str(e)}")
@@ -216,12 +207,6 @@ class PathManager:
                 mol_systems: 发现的分子系统字典
                 preserve_existing: 是否保留已有的状态信息
         """
-        # 如果需要保留现有状态，先建立系统路径到状态的映射
-        existing_status = {}
-        if preserve_existing and self.targets:
-            for target in self.targets:
-                existing_status[target.system_path] = target.status
-            self.logger.info(f"保留 {len(existing_status)} 个已有系统的状态信息")
 
         self.targets.clear()
         self.mol_groups.clear()
@@ -255,9 +240,6 @@ class PathManager:
                 except OSError:
                     creation_time = 0.0
 
-                # 使用已有状态或默认为pending
-                status = existing_status.get(system_path, "pending")
-
                 # 计算源文件哈希
                 source_hash = self._calculate_source_hash(system_path)
 
@@ -268,7 +250,6 @@ class PathManager:
                     temperature=temp,
                     stru_files=stru_files,
                     creation_time=creation_time,
-                    status=status,
                     source_hash=source_hash,
                 )
                 self.targets.append(target)
@@ -280,11 +261,6 @@ class PathManager:
         self.logger.info(
             f"PathManager loaded {len(self.mol_groups)} molecules with {total_targets} targets"
         )
-        if preserve_existing:
-            preserved_completed = len(
-                [t for t in self.targets if t.status == "completed"]
-            )
-            self.logger.info(f"保留了 {preserved_completed} 个已完成系统的状态")
 
     def deduplicate_targets(self) -> None:
         """去除重复的分析目标，基于系统名称(system_key)保留修改时间最晚的"""
@@ -366,24 +342,6 @@ class PathManager:
     def get_all_targets(self) -> List[AnalysisTarget]:
         return self.targets.copy()
 
-    def get_targets_by_status(self, status: str) -> List[AnalysisTarget]:
-        return [target for target in self.targets if target.status == status]
-
-    def update_target_status(self, system_path: str, status: str) -> bool:
-        """更新目标状态"""
-        for target in self.targets:
-            if target.system_path == system_path:
-                target.status = status
-                return True
-        return False
-
-    def get_progress_summary(self) -> Dict[str, int]:
-        summary = {"pending": 0, "processing": 0, "completed": 0, "failed": 0}
-        for target in self.targets:
-            summary[target.status] += 1
-        summary["total"] = len(self.targets)
-        return summary
-
     def save_analysis_targets(self, analysis_params: Dict[str, Any] = None) -> str:
         """保存分析目标到 analysis_targets.json，包含详细的哈希和状态信息"""
         if not self.targets_file:
@@ -411,7 +369,6 @@ class PathManager:
                 "summary": {
                     "total_molecules": len(self.mol_groups),
                     "total_systems": len(self.targets),
-                    "status_counts": self.get_progress_summary(),
                 },
                 "molecules": {},
             }
@@ -434,7 +391,6 @@ class PathManager:
                     system_data = {
                         "system_path": target.system_path,
                         "stru_files_count": len(target.stru_files),
-                        "status": target.status,
                         "source_hash": target.source_hash,
                         "sampled_frames": sampled_frames_compact,
                     }
@@ -535,7 +491,6 @@ class PathManager:
                         temperature=parsed_temperature,
                         stru_files=[],  # 将在 load_from_discovery 中重新填充
                         creation_time=system_data.get("creation_time", 0.0),
-                        status=system_data.get("status", "pending"),
                         source_hash=system_data.get("source_hash", ""),
                         sampled_frames=sampled_frames_data,
                     )
@@ -572,56 +527,18 @@ class PathManager:
         return compatible
 
     def check_existing_results(self) -> None:
-        """检查已有的分析结果，更新系统状态以实现增量计算"""
+        """检查已有的分析结果，验证哈希匹配性"""
         if not self.targets:
             return
 
-        updated_count = 0
         hash_mismatch_count = 0
 
-        # 检查汇总结果文件是否存在
-        summary_file = os.path.join(
-            self.output_dir, "combined_analysis_results", "system_metrics_summary.csv"
-        )
-        existing_systems = set()
-
-        if os.path.exists(summary_file):
-            try:
-                import csv
-
-                with open(summary_file, encoding="utf-8") as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        if "System" in row:
-                            existing_systems.add(row["System"])
-            except Exception as e:
-                self.logger.warning(f"读取汇总结果文件失败: {str(e)}")
-
-        # 预计算均值结构目录
-        mean_struct_dir = os.path.join(self.output_dir, 'mean_structures')
-
-        # 检查每个目标（即便标记为 completed 也要重新验证文件是否仍然存在；防止只剩 analysis_targets.json 的情况导致跳过重算）
+        # 检查每个目标的源文件哈希是否匹配
         for target in self.targets:
             system_name = target.system_name
             system_path = target.system_path
 
-            # 检查汇总结果中是否有该系统
-            has_summary = system_name in existing_systems
-
-            # 检查单体系详细结果文件是否存在（现在始终要求存在）
-            frame_metrics_file = os.path.join(
-                self.output_dir,
-                "single_analysis_results",
-                f"frame_metrics_{system_name}.csv",
-            )
-            has_frame_metrics = os.path.exists(frame_metrics_file)
-
-            # 检查均值结构JSON（复用构象平均）
-            mean_struct_path = os.path.join(mean_struct_dir, f"mean_structure_{system_name}.json")
-            has_mean_struct = os.path.exists(mean_struct_path)
-
             # 检查源文件哈希是否匹配（从当前目录的targets文件）
-            hash_matches = True
             if os.path.exists(self.targets_file):
                 try:
                     with open(self.targets_file, encoding="utf-8") as f:
@@ -633,7 +550,6 @@ class PathManager:
                                     old_hash = sys_data.get("source_hash", "")
                                     new_hash = target.source_hash
                                     if old_hash and new_hash and old_hash != new_hash:
-                                        hash_matches = False
                                         hash_mismatch_count += 1
                                         self.logger.warning(
                                             f"检测到源文件变更: {system_name} (哈希不匹配)"
@@ -642,34 +558,12 @@ class PathManager:
                 except Exception as e:
                     self.logger.warning(f"读取历史哈希信息失败: {str(e)}")
 
-            # 如果同时满足条件且哈希匹配（并包含均值结构），标记为已完成
-            if has_summary and has_frame_metrics and has_mean_struct and hash_matches:
-                if target.status != "completed":
-                    updated_count += 1
-                target.status = "completed"
-                self.logger.info(f"检测到已完成的分析结果(含均值结构): {system_name}")
-            else:
-                # 任何缺失、哈希不匹配或文件被删都触发重算
-                if target.status == "completed":
-                    self.logger.warning(
-                        f"结果文件缺失或哈希不匹配，已从 completed 复位为 pending: {system_name}"
-                    )
-                if has_summary and has_frame_metrics and has_mean_struct and not hash_matches:
-                    self.logger.info(f"源文件已变更，重新分析: {system_name}")
-                elif has_summary and has_frame_metrics and not has_mean_struct:
-                    self.logger.debug(f"复用条件缺失(无均值结构)，需重新计算: {system_name}")
-                target.status = "pending"
-
-        if updated_count > 0:
-            self.logger.info(
-                f"增量计算: 发现 {updated_count} 个已完成的系统，将跳过重新计算"
-            )
         if hash_mismatch_count > 0:
             self.logger.warning(
                 f"源文件变更检测: {hash_mismatch_count} 个系统需要重新分析"
             )
-        if updated_count == 0 and hash_mismatch_count == 0:
-            self.logger.info("增量计算: 未发现已完成的分析结果，将进行完整计算")
+        else:
+            self.logger.info("所有系统源文件哈希匹配，无需重新采样")
 
     # 新增：仅基于 analysis_targets.json + 源数据哈希 判定是否复用采样结果；不跳过其它计算
     def determine_sampling_reuse(self) -> dict:
@@ -683,7 +577,7 @@ class PathManager:
         满足后:
           - target.sampled_frames 赋值为历史采样帧
           - target.reuse_sampling = True
-          - target.status 保持 pending (仍会重算指标/均值结构/CSV导出)
+          - 所有下游输出都重新计算
 
         Returns:
           dict[system_name] -> List[int]  (可复用的采样帧列表)
