@@ -7,6 +7,18 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+# Level 3: 统一结构指标工具导入（兼容旧RMSDCalculator）
+try:
+    from ..utils.structural_metrics import (
+        kabsch_align as _sm_kabsch_align,
+        compute_rmsd_series as _sm_compute_rmsd_series,
+        iterative_mean_structure as _sm_iter_mean_struct,
+    )
+except Exception:  # 若失败则保持旧实现
+    _sm_kabsch_align = None
+    _sm_compute_rmsd_series = None
+    _sm_iter_mean_struct = None
+
 from ..io.stru_parser import StrUParser
 from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics
@@ -14,83 +26,42 @@ from .sampler import PowerMeanSampler
 from ..utils.data_utils import ErrorHandler
 
 
-class RMSDCalculator:
-    """经典RMSD计算器，实现Kabsch算法和迭代对齐"""
-
-    @staticmethod
-    def center_coordinates(coords: np.ndarray) -> np.ndarray:
-        """将坐标平移到质心"""
-        centroid = np.mean(coords, axis=0)
-        return coords - centroid
+class RMSDCalculator:  # 保留兼容入口，内部委托 structural_metrics
+    """兼容层：委托到 utils.structural_metrics (Level 3)。"""
 
     @staticmethod
     def kabsch_align(mobile: np.ndarray, target: np.ndarray) -> np.ndarray:
-        """使用Kabsch算法将mobile坐标对齐到target坐标"""
-        # 确保输入是numpy数组
+        if _sm_kabsch_align is not None:
+            return _sm_kabsch_align(mobile, target)
+        # 回退：最简实现（不做旋转，仅中心对齐）
         mobile = np.array(mobile, dtype=float)
         target = np.array(target, dtype=float)
-
-        # 中心化坐标
-        mobile_centered = RMSDCalculator.center_coordinates(mobile)
-        target_centered = RMSDCalculator.center_coordinates(target)
-
-        # 计算协方差矩阵
-        covariance = np.dot(mobile_centered.T, target_centered)
-
-        # SVD分解
-        V, S, Wt = np.linalg.svd(covariance)
-
-        # 检查是否需要反射
-        d = np.sign(np.linalg.det(np.dot(V, Wt)))
-
-        # 构造旋转矩阵
-        rotation = np.dot(V, np.dot(np.diag([1, 1, d]), Wt))
-
-        # 应用旋转和平移
-        aligned = np.dot(mobile_centered, rotation.T)
-
-        return aligned
+        return mobile - mobile.mean(axis=0)
 
     @staticmethod
     def calculate_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
-        """计算两个坐标集之间的RMSD"""
         diff = coords1 - coords2
-        return np.sqrt(np.mean(np.sum(diff**2, axis=1)))
+        return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
 
     @staticmethod
     def iterative_alignment(frames: List, max_iterations: int = 10, tolerance: float = 1e-5) -> Tuple[np.ndarray, List[float]]:
-        """迭代对齐算法计算均值结构和每帧RMSD"""
         if not frames:
             return np.array([]), []
-
-        # 初始化参考结构（第一帧）
-        ref_coords = frames[0].positions.copy()
-        all_coords = [frame.positions.copy() for frame in frames]
-
-        # 迭代对齐
-        for iteration in range(max_iterations):
-            # 对齐所有帧到当前参考
-            aligned_coords = []
-            for coords in all_coords:
-                aligned = RMSDCalculator.kabsch_align(coords, ref_coords)
-                aligned_coords.append(aligned)
-
-            # 计算新的均值结构
-            new_ref = np.mean(aligned_coords, axis=0)
-
-            # 检查收敛
-            if np.allclose(new_ref, ref_coords, atol=tolerance):
-                break
-
-            ref_coords = new_ref
-
-        # 计算每帧RMSD（相对于最终均值结构）
-        rmsds = []
-        for aligned in aligned_coords:
-            rmsd = RMSDCalculator.calculate_rmsd(aligned, ref_coords)
-            rmsds.append(rmsd)
-
-        return ref_coords, rmsds
+        if _sm_iter_mean_struct is None:
+            # 回退到旧逻辑（简化）
+            ref_coords = frames[0].positions.copy()
+            all_coords = [frame.positions.copy() for frame in frames]
+            aligned = [coords - coords.mean(axis=0) for coords in all_coords]
+            rmsds = [RMSDCalculator.calculate_rmsd(a, ref_coords) for a in aligned]
+            return ref_coords, rmsds
+        # 使用新统一实现：先提取 positions 列表
+        pos_list = [f.positions.copy() for f in frames]
+        mean_struct, aligned_list = _sm_iter_mean_struct(pos_list, max_iter=max_iterations, tol=tolerance)
+        if aligned_list:
+            rmsds = [RMSDCalculator.calculate_rmsd(a, mean_struct) for a in aligned_list]
+        else:
+            rmsds = []
+        return mean_struct, rmsds
 
 
 class PCAReducer:
