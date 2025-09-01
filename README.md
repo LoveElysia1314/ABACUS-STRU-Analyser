@@ -1,7 +1,18 @@
 
-# ABACUS-STRU-Analyser
+# ABACUS-STRU-An## 主要特性 | Key Features
 
-🔬 **高效的 ABACUS 分子动力学轨迹分析工具 / Efficient ABACUS MD Trajectory Analysis Suite**
+- ⚡ **构象向量化 / Conformation Vectorization**：基于非氢原子对距离，PCA降维，自动忽略旋转/平移/缩放。
+- 🧮 **PCA降维 / PCA Dimensionality Reduction**：主成分分析空间，所有分析在降维空间进行。
+- 🔬 **多物理量融合 / Multi-Physics Integration**：能量与PCA分量综合向量，信息全面。
+- 🎯 **智能采样 / Intelligent Sampling**：幂平均距离最大化贪心采样算法。
+- 📊 **多样性与分布指标 / Diversity & Distribution Metrics**：MinD、ANND、MPD、RMSD、Diversity Score、Coverage Ratio、JS Divergence、EMD Distance等。
+- 🔗 **相关性分析 / Correlation Analysis**：温度、构象与多样性指标的统计相关性。
+- ⚖️ **采样方法对比 / Sampling Method Comparison**：智能采样、随机采样、均匀采样多方法性能对比。
+- 🚀 **批量并行 / Batch Parallelism**：自动发现多个系统，多进程并行分析。
+- � **参数隔离 / Parameter-Isolated Output**：输出目录自动按参数命名。
+- 🔥 **热更新与断点续算 / Hot Update & Resume**：程序中断后自动检测进度并续算，避免重复计算。
+- 💾 **增量保存 / Incremental Saving**：边计算边写入文件，支持实时数据持久化。
+- 📝 **命令行友好 / CLI Friendly**：所有参数支持长短选项。 **高效的 ABACUS 分子动力学轨迹分析工具 / Efficient ABACUS MD Trajectory Analysis Suite**
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -68,7 +79,7 @@ python main_correlation_analyser.py
 | --output_dir | -o | analysis_results | 输出目录 | Output directory |
 | --search_path | -s | 当前目录父目录 | 搜索路径 | Search path(s) |
 | --include_project | -i | False | 包含项目自身 | Include project dir |
-| --force_recompute | -f | False | 强制重算 | Force recompute |
+| --force_recompute | -f | False | 强制重算（忽略进度） | Force recompute (ignore progress) |
 
 ### 相关性分析器参数 / Correlation Analyser
 | 参数 | 短选项 | 默认值 | 说明 | Description |
@@ -88,10 +99,18 @@ analysis_results/
     ├── combined_analysis_results/
     │   ├── system_metrics_summary.csv
     │   ├── parameter_analysis_results.csv
-    │   └── sampling_methods_comparison.csv
-    └── single_analysis_results/
-        ├── frame_metrics_*.csv
-        └── sampling_compare_enhanced.csv
+    │   ├── sampling_methods_comparison.csv
+    │   └── progress.json                    # 进度跟踪文件 / Progress tracking
+    ├── single_analysis_results/
+    │   ├── frame_metrics_*.csv
+    │   └── sampling_compare_enhanced.csv
+    ├── mean_structures/
+    │   ├── index.json
+    │   └── mean_structure_*.json
+    └── deepmd_npy/                          # DeepMD数据集 / DeepMD dataset
+        ├── type.raw
+        ├── set.000/
+        └── split_*/                          # 数据集拆分 / Dataset splits
 ```
 
 ### 主要输出文件 | Main Output Files
@@ -101,6 +120,8 @@ analysis_results/
 - **frame_metrics_*.csv**：单体系帧级指标 / Per-system frame metrics
 - **sampling_compare_enhanced.csv**：采样方法对比明细 / Sampling comparison (detailed)
 - **sampling_methods_comparison.csv**：采样方法对比汇总 / Sampling comparison (summary)
+- **progress.json**：分析进度跟踪（断点续算） / Analysis progress tracking (resume capability)
+- **mean_structure_*.json**：平均结构数据 / Mean structure data
 
 ---
 
@@ -117,6 +138,12 @@ analysis_results/
 ### 智能采样 / Intelligent Sampling
 - **Power Mean采样**: 幂平均距离最大化贪心采样 / Power mean maximization greedy sampling
 - **采样复用**: 基于哈希判定，无状态管理 / Hash-based sampling reuse, stateless
+
+### 热更新与断点续算 / Hot Update & Resume
+- **进度跟踪**: 自动记录已完成系统，避免重复计算 / Automatic progress tracking to avoid recomputation
+- **增量保存**: 边计算边写入，支持实时数据持久化 / Incremental saving with real-time data persistence
+- **智能检测**: 程序重启时自动检测并跳过已处理系统 / Smart detection to skip processed systems on restart
+- **数据完整性**: 确保程序中断时数据不丢失 / Data integrity guarantee during interruptions
 
 ### 采样方法对比 / Sampling Method Comparison
 - **智能采样**: Power Mean贪心 / Power Mean greedy
@@ -152,6 +179,17 @@ python main_abacus_analyser.py -f
 python main_correlation_analyser.py -i custom.csv -o custom_results
 ```
 
+### 断点续算 / Resume from Checkpoint
+```bash
+# 首次运行 / First run
+python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90
+# 程序中断后继续 / Resume after interruption
+python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90
+# 系统会自动检测进度并跳过已完成的系统
+# 强制重新计算所有系统 / Force recompute all systems
+python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -f
+```
+
 ### 采样方法对比 / Sampling Comparison
 ```bash
 # 采样方法对比分析 / Compare sampling methods
@@ -171,6 +209,9 @@ python sampling_compare_demo.py --result_dir /path/to/analysis_results/run_r0.05
 - 分析慢：可增采样比例(-r)、降PCA阈值(-v)、增进程数(-w)。
 - 内存不足：降采样比例或用单进程(-w 1)。
 - 找不到系统目录：检查目录命名格式。
+- **程序中断后如何续算**：直接重新运行相同命令，系统会自动检测进度并续算。
+- **强制重新计算**：使用 `-f` 参数忽略已有进度，重新计算所有系统。
+- **进度文件损坏**：删除 `progress.json` 文件，系统会重新开始计算。
 
 ---
 
@@ -200,6 +241,13 @@ mypy src/
 > 主要变更按时间归纳，详见 [Git 提交历史](https://github.com/LoveElysia1314/ABACUS-STRU-Analyser/commits/main)
 
 ### 2025-09
+- 🔥 **热更新与断点续算功能**：实现边计算边写入，支持程序中断后自动续算，避免重复计算。
+- 📊 **增量保存机制**：CSV文件支持追加写入，JSON文件支持智能更新，实时数据持久化。
+- 📁 **进度跟踪系统**：新增progress.json文件，自动记录已完成系统，支持智能跳过。
+- 💾 **数据完整性保证**：所有文件写入后强制同步，确保程序中断时数据不丢失。
+- 🔄 **DeepMD导出优化**：支持检测已有数据集，避免重复导出。
+- 📝 **文档完善**：更新README，详细说明热更新和断点续算功能。
+
 - 采样复用逻辑彻底重构，移除status字段，采样复用仅依赖哈希判定，所有输出强制重写，简化增量/全量切换逻辑。
 - 采样方法对比、相关性分析、系统指标输出三者统一，采样效果验证集成主流程，指标注册表驱动。
 - 多样性与分布相似性指标（Diversity Score, Coverage Ratio, JS Divergence, EMD Distance）正式纳入主流程。

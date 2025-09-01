@@ -256,10 +256,21 @@ class MainApp:
             return
 
         analysis_targets = path_manager.get_all_targets()
+        
+        # 加载进度，过滤已处理的系统
+        progress_info = ResultSaver.load_progress(actual_output_dir)
+        processed_systems = set(progress_info.get('processed_systems', []))
+        
+        if processed_systems and not args.force_recompute:
+            # 过滤出未处理的系统
+            unprocessed_targets = [t for t in analysis_targets if t.system_name not in processed_systems]
+            self.logger.info(f"检测到 {len(processed_systems)} 个已处理系统，跳过这些系统")
+            analysis_targets = unprocessed_targets
+        
         system_paths = [target.system_path for target in analysis_targets]
         completed_count = 0  # 不再区分状态，所有目标都处理
 
-        self.logger.info(f"准备分析 {len(system_paths)} 个系统（所有输出都重新计算）...")
+        self.logger.info(f"准备分析 {len(system_paths)} 个系统...")
         
         # 执行分析
         if workers > 1:
@@ -273,9 +284,17 @@ class MainApp:
         if analysis_results:
             self.logger.info("保存分析结果...")
             
-            # 判断是否有已完成的系统（增量计算模式）
-            completed_systems = 0  # 不再区分状态
-            is_incremental = False  # 总是重新计算所有输出            # 使用统一的保存接口（incremental 标志决定是否合并已有结果）
+            # 加载现有进度，判断是否为增量模式
+            progress_info = ResultSaver.load_progress(actual_output_dir)
+            processed_systems = set(progress_info.get('processed_systems', []))
+            is_incremental = len(processed_systems) > 0 and not args.force_recompute
+            
+            if is_incremental:
+                self.logger.info(f"检测到已有进度（{len(processed_systems)} 个已处理系统），启用增量保存模式")
+            else:
+                self.logger.info("全新分析或强制重新计算，使用完整保存模式")
+            
+            # 使用统一的保存接口
             self.logger.info("保存分析结果（含单体系详细结果与汇总）...")
             ResultSaver.save_results(actual_output_dir, analysis_results, incremental=is_incremental)
             
@@ -305,7 +324,8 @@ class MainApp:
                 run_dir=actual_output_dir,
                 output_dir=os.path.join(actual_output_dir, "deepmd_npy"),
                 split_ratio=[0.8, 0.2],
-                logger=self.logger
+                logger=self.logger,
+                force_reexport=args.force_recompute  # 如果强制重新计算，也重新导出deepmd数据
             )
             self.logger.info("采样帧deepmd数据集导出完成")
         except Exception as e:

@@ -4,6 +4,7 @@ import csv
 import logging
 import os
 from typing import List, Dict, Tuple
+import datetime
 
 import numpy as np
 
@@ -31,7 +32,25 @@ class ResultSaver:
     SYSTEM_SUMMARY_HEADERS = REGISTRY_SYSTEM_SUMMARY_HEADERS
     SYSTEM_SUMMARY_SCHEMA_VERSION = SUMMARY_SCHEMA_VERSION
 
-    SAMPLING_RECORDS_HEADERS = ["System", "System_Path", "Sampled_Frames"]  # Sampled_Frames格式: [1,5,10,15,20]
+    @staticmethod
+    def load_progress(output_dir: str) -> Dict[str, any]:
+        """加载进度信息，用于断点续算
+        
+        Returns:
+            包含已处理系统列表和其他进度信息的字典
+        """
+        progress_path = os.path.join(output_dir, "combined_analysis_results", "progress.json")
+        if not os.path.exists(progress_path):
+            return {'processed_systems': [], 'last_updated': None}
+            
+        try:
+            import json
+            with open(progress_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"加载进度文件失败: {e}")
+            return {'processed_systems': [], 'last_updated': None}
 
     @staticmethod
     def _format_metric_row(metrics: TrajectoryMetrics) -> List[str]:
@@ -39,21 +58,39 @@ class ResultSaver:
         return build_registry_summary_row(metrics)
 
     @staticmethod
-    def export_mean_structure(output_dir: str, metrics: TrajectoryMetrics) -> None:
+    def export_mean_structure(output_dir: str, metrics: TrajectoryMetrics, force_update: bool = False) -> None:
         """导出单体系平均结构到独立 JSON 文件。
 
         输出路径: <run_dir>/mean_structures/mean_structure_<system>.json
         内容包含: 版本号, 导出时间, 系统基础信息, frame 统计, 维度, 均值结构 shape, 实际坐标数据。
         若均值结构为空/None 则跳过。
+        
+        Args:
+            force_update: 如果为True，强制更新已存在的文件
         """
         logger = logging.getLogger(__name__)
         try:
             if metrics.mean_structure is None or getattr(metrics.mean_structure, 'size', 0) == 0:
                 return
-            import json, datetime
+                
+            import json
             mean_dir = os.path.join(output_dir, 'mean_structures')
             FileUtils.ensure_dir(mean_dir)
             filepath = os.path.join(mean_dir, f"mean_structure_{metrics.system_name}.json")
+            
+            # 检查文件是否已存在且无需强制更新
+            if not force_update and os.path.exists(filepath):
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f)
+                        # 如果文件已存在且版本相同，跳过更新
+                        if existing_data.get('version') == '1.0' and existing_data.get('num_frames') == metrics.num_frames:
+                            logger.debug(f"均值结构文件已存在且最新: {metrics.system_name}")
+                            return
+                except Exception:
+                    # 如果读取失败，继续写入
+                    pass
+            
             data = {
                 "version": "1.0",  # PR1 初始版本
                 "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
@@ -72,6 +109,8 @@ class ResultSaver:
             # 原子级别字段扩展预留
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
 
             # 维护索引文件（追加/更新）
             try:
@@ -80,8 +119,7 @@ class ResultSaver:
                 if os.path.exists(index_path):
                     try:
                         with open(index_path, 'r', encoding='utf-8') as idx_f:
-                            import json as _json
-                            index = _json.load(idx_f) or {}
+                            index = json.load(idx_f) or {}
                     except Exception:
                         index = {}
                 index[metrics.system_name] = {
@@ -93,8 +131,13 @@ class ResultSaver:
                 }
                 with open(index_path, 'w', encoding='utf-8') as idx_f:
                     json.dump(index, idx_f, ensure_ascii=False, indent=2)
+                    idx_f.flush()
+                    os.fsync(idx_f.fileno())
             except Exception as ie:
                 logger.warning(f"更新均值结构索引失败: {ie}")
+                
+            logger.debug(f"成功导出均值结构: {metrics.system_name}")
+            
         except Exception as e:
             logger.warning(f"导出均值结构失败: {metrics.system_name}: {e}")
 
@@ -117,7 +160,7 @@ class ResultSaver:
                     ResultSaver.save_system_summary_incremental(output_dir, all_metrics)
                     # 续算也强制覆盖均值结构（保持与最新指标一致）
                     for m in all_metrics:
-                        ResultSaver.export_mean_structure(output_dir, m)
+                        ResultSaver.export_mean_structure(output_dir, m, force_update=True)
                 else:
                     # 完整保存逻辑 + 导出均值结构 JSON
                     ResultSaver._save_system_summary_complete(output_dir, all_metrics)
@@ -130,7 +173,7 @@ class ResultSaver:
                     sampled_frames = [f.frame_id for f in frames if f.frame_id in metrics.sampled_frames]
                     pca_components_data = result[4]  # PCA分量数据
                     rmsd_per_frame = result[6]  # RMSD数据
-                    ResultSaver.save_frame_metrics(output_dir, metrics.system_name, frames, sampled_frames, pca_components_data, rmsd_per_frame)
+                    ResultSaver.save_frame_metrics(output_dir, metrics.system_name, frames, sampled_frames, pca_components_data, rmsd_per_frame, incremental=incremental)
 
                 # PCA分量已集成到单体系结果中，无需单独保存
 
@@ -191,31 +234,42 @@ class ResultSaver:
         sampled_frames: List[int],
         pca_components_data: List[Dict] = None,
         rmsd_per_frame: List[float] = None,
+        incremental: bool = False,
     ) -> None:
-        """Save individual frame metrics to CSV file, with energy/force info if available"""
+        """Save individual frame metrics to CSV file, with energy/force info if available
+        
+        Args:
+            incremental: If True, append to existing file instead of overwriting
+        """
         single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
         FileUtils.ensure_dir(single_analysis_dir)
         csv_path = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
 
         try:
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            file_exists = os.path.exists(csv_path)
+            write_mode = 'a' if incremental and file_exists else 'w'
+            
+            with open(csv_path, write_mode, newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                # 准备表头
-                headers = ["Frame_ID", "Selected"]
-                headers.append("RMSD")  # 基于构象均值的RMSD
-                # 能量补充信息（放在后面）
-                headers.append("Energy(eV)")
-                headers.append("Energy_Standardized")
-                if pca_components_data:
-                    # 获取所有可能的PC列
-                    max_pc = 0
-                    for item in pca_components_data:
-                        for key in item.keys():
-                            if key.startswith('PC'):
-                                pc_num = int(key[2:])
-                                max_pc = max(max_pc, pc_num)
-                    headers.extend([f"PC{i}" for i in range(1, max_pc + 1)])
-                writer.writerow(headers)
+                
+                # 只有在创建新文件或非增量模式时写入表头
+                if not file_exists or not incremental:
+                    # 准备表头
+                    headers = ["Frame_ID", "Selected"]
+                    headers.append("RMSD")  # 基于构象均值的RMSD
+                    # 能量补充信息（放在后面）
+                    headers.append("Energy(eV)")
+                    headers.append("Energy_Standardized")
+                    if pca_components_data:
+                        # 获取所有可能的PC列
+                        max_pc = 0
+                        for item in pca_components_data:
+                            for key in item.keys():
+                                if key.startswith('PC'):
+                                    pc_num = int(key[2:])
+                                    max_pc = max(max_pc, pc_num)
+                        headers.extend([f"PC{i}" for i in range(1, max_pc + 1)])
+                    writer.writerow(headers)
 
                 sampled_set = set(sampled_frames)
 
@@ -249,6 +303,11 @@ class ResultSaver:
                         for pc_num in range(1, max_pc + 1):
                             row.append("0.000000")
                     writer.writerow(row)
+                    
+                # 确保数据写入磁盘
+                f.flush()
+                os.fsync(f.fileno())
+                
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to save frame metrics for {system_name}: {e}")
@@ -258,67 +317,69 @@ class ResultSaver:
     def save_system_summary_incremental(
         output_dir: str, new_metrics: List[TrajectoryMetrics]
     ) -> None:
-        """Save system summary with incremental support"""
+        """Save system summary with incremental support - append new rows without rewriting entire file"""
         try:
             combined_analysis_dir = os.path.join(
                 output_dir, "combined_analysis_results"
             )
             FileUtils.ensure_dir(combined_analysis_dir)
             csv_path = os.path.join(combined_analysis_dir, "system_metrics_summary.csv")
+            progress_path = os.path.join(combined_analysis_dir, "progress.json")
 
-            all_rows = []
-
-            # Read existing data if file exists
-            if os.path.exists(csv_path):
+            # 读取已处理的系统
+            processed_systems = set()
+            if os.path.exists(progress_path):
                 try:
-                    with open(csv_path, encoding="utf-8") as f:
-                        reader = csv.DictReader(f)
-                        new_system_names = {m.system_name for m in new_metrics}
-                        for row in reader:
-                            if row["System"] not in new_system_names:
-                                all_rows.append(
-                                    [
-                                        row.get(h, "")
-                                        for h in ResultSaver.SYSTEM_SUMMARY_HEADERS
-                                    ]
-                                )
-                except Exception as e:
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to read existing CSV file {csv_path}: {e}")
+                    import json
+                    with open(progress_path, 'r', encoding='utf-8') as f:
+                        progress_data = json.load(f)
+                        processed_systems = set(progress_data.get('processed_systems', []))
+                except Exception:
+                    processed_systems = set()
 
-            # Add new data
-            for m in new_metrics:
-                # 使用统一的格式化方法
-                row = ResultSaver._format_metric_row(m)
-                all_rows.append(row)
+            # 过滤出新的系统
+            new_system_metrics = [m for m in new_metrics if m.system_name not in processed_systems]
+            
+            if not new_system_metrics:
+                logger = logging.getLogger(__name__)
+                logger.info("所有系统已处理完毕，无需更新")
+                return
 
-            # Sort and write data
-            def sort_key(row):
-                try:
-                    system_name = row[0]
-                    import re
+            # 检查文件是否存在
+            file_exists = os.path.exists(csv_path)
+            write_mode = 'a' if file_exists else 'w'
 
-                    match = re.match(
-                        r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name
-                    )
-                    if match:
-                        mol_id, conf, temp = match.groups()
-                        return (int(mol_id), int(conf), int(temp))
-                except Exception as e:
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to parse system name {system_name}: {e}")
-                return (9999, 9999, 9999)
-
-            all_rows.sort(key=sort_key)
-
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            with open(csv_path, write_mode, newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(ResultSaver.SYSTEM_SUMMARY_HEADERS)
-                writer.writerows(all_rows)
+                
+                # 只有在创建新文件时写入表头
+                if not file_exists:
+                    writer.writerow(ResultSaver.SYSTEM_SUMMARY_HEADERS)
+
+                # 追加新数据
+                for m in new_system_metrics:
+                    row = ResultSaver._format_metric_row(m)
+                    writer.writerow(row)
+                    
+                # 确保数据写入磁盘
+                f.flush()
+                os.fsync(f.fileno())
+
+            # 更新进度文件
+            processed_systems.update(m.system_name for m in new_system_metrics)
+            progress_data = {
+                'processed_systems': list(processed_systems),
+                'last_updated': str(datetime.datetime.utcnow().isoformat() + "Z")
+            }
+            with open(progress_path, 'w', encoding='utf-8') as f:
+                json.dump(progress_data, f, ensure_ascii=False, indent=2)
+
+            logger = logging.getLogger(__name__)
+            logger.info(f"增量保存了 {len(new_system_metrics)} 个新系统的汇总数据")
 
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"Failed to save system summary: {e}")
+            logger.error(f"Failed to save system summary incrementally: {e}")
             raise
 
     @staticmethod
