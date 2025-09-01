@@ -53,6 +53,20 @@ import logging
 import numpy as np
 from scipy.spatial.distance import cdist, pdist
 
+# Level 3: 引入结构指标统一模块（供外部使用）
+try:  # 软依赖，避免循环导入风险
+    from ..utils.structural_metrics import (
+        kabsch_align,
+        iterative_mean_structure,
+        compute_rmsd_series as calculate_rmsd_series,
+        compute_rmsf,
+    )
+except Exception:  # noqa: BLE001 - 宽松捕获，仅降级功能
+    kabsch_align = None  # type: ignore
+    iterative_mean_structure = None  # type: ignore
+    calculate_rmsd_series = None  # type: ignore
+    compute_rmsf = None  # type: ignore
+
 # 导入解析器模块
 
 # 注意：日志配置现在由主程序管理，模块只获取logger
@@ -131,58 +145,10 @@ class SummaryInfo:
 
 
 # --- 采样函数 ---
-def greedy_max_avg_distance(points, k, frame_MinD_values, num_runs=10, seed=42):
-    n, d = points.shape
-    if k >= n:
-        return points, np.arange(n)
-
-    best_sum = -np.inf
-    best_indices = None
-
-    for run in range(num_runs):
-        np.random.seed(seed + run)
-        MinD_array = np.array(frame_MinD_values)
-        min_idx = np.argmin(MinD_array)
-        max_idx = np.argmax(MinD_array)
-        if min_idx == max_idx:
-            idxs = np.random.choice(n, 2, replace=False).tolist()
-        else:
-            idxs = [min_idx, max_idx]
-
-        selected = set(idxs)
-        dists_to_S = np.zeros(n)
-        for i in range(n):
-            if i not in selected:
-                dists_to_S[i] = np.sum(cdist(points[list(selected)], points[i : i + 1]))
-
-        for _ in range(2, k):
-            candidates = [i for i in range(n) if i not in selected]
-            if not candidates:
-                break
-            next_idx = candidates[np.argmax(dists_to_S[candidates])]
-            selected.add(next_idx)
-
-            new_dists = cdist(points[next_idx : next_idx + 1], points).flatten()
-            for i in range(n):
-                if i not in selected:
-                    dists_to_S[i] += new_dists[i]
-                else:
-                    dists_to_S[i] = -np.inf
-
-        selected_list = list(selected)
-        if len(selected_list) >= 2:
-            subset_points = points[selected_list]
-            pairwise_dists = cdist(subset_points, subset_points)
-            dist_sum = np.sum(pairwise_dists) / 2
-
-            if dist_sum > best_sum:
-                best_sum = dist_sum
-                best_indices = np.array(selected_list)
-
-    if best_indices is None:
-        best_indices = np.arange(min(k, n))
-
-    return points[best_indices], best_indices
+# 说明：原本此处存在 greedy_max_avg_distance 的本地实现，现已统一迁移/整合至 `core.sampler.GreedyMaxDistanceSampler`。
+# 如需最大距离贪婪采样，请在上层调用处使用：
+# from ..core.sampler import GreedyMaxDistanceSampler
+# selected_indices, _, _ = GreedyMaxDistanceSampler.select_frames(points, k)
 
 
 # --- 核心分析逻辑 ---

@@ -23,7 +23,8 @@ from scipy.stats import entropy, wasserstein_distance
 from sklearn.decomposition import PCA
 
 from . import ValidationUtils
-from ..core.metrics import MetricCalculator  # reuse distance helpers
+# 注意：避免循环导入，不再从 core.metrics 导入 MetricCalculator。
+# 若需要核心额外辅助函数，请在运行时延迟导入或在此工具内部重写。
 
 
 @dataclass

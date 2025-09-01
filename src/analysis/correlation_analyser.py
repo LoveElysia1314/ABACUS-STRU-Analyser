@@ -96,6 +96,17 @@ class CorrelationAnalyser:
             date_format=Constants.DEFAULT_DATE_FORMAT,
         )
 
+    # 补充：统一列表/数组到纯 Python list 的安全转换，避免 AttributeError
+    def _to_python_list(self, obj):  # 轻量工具，保持与日志调用兼容
+        try:
+            if isinstance(obj, (list, tuple)):
+                return list(obj)
+            if hasattr(obj, 'tolist'):
+                return obj.tolist()
+            return [obj]
+        except Exception:
+            return [str(obj)]
+
 
 
     def analyse_correlations(self, csv_file_path: str, output_dir: str) -> bool:
