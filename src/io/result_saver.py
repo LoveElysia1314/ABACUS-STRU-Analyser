@@ -17,32 +17,25 @@ class ResultSaver:
     """结果保存器类，负责保存分析结果到CSV文件"""
 
     # CSV Headers constants
+    # Level 4+ 列顺序（进一步语义分组 & 类型聚类）
+    # 分组顺序：
+    # 1) 基础标识 & 条件 -> 2) 规模/维度 -> 3) 核心结构距离指标 -> 4) 多样性/覆盖/能量 ->
+    # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性 -> 7) 平均结构坐标
     SYSTEM_SUMMARY_HEADERS = [
-        "System",
-        "Molecule_ID",
-        "Configuration",
-        "Temperature(K)",
-        "Num_Frames",
-        "Dimension",
-        "RMSD_Mean",  # RMSD均值（原参数）
-        "RMSD_Mean_Sampled",  # RMSD均值（采样后参数）
-        "MinD",  # 最小间距（原参数）
-        "MinD_Sampled",  # 最小间距（采样后参数）
-        "ANND",  # 平均最近邻距离（原参数）
-        "ANND_Sampled",  # 平均最近邻距离（采样后参数）
-        "MPD",  # 平均成对距离（原参数）
-        "MPD_Sampled",  # 平均成对距离（采样后参数）
-        "PCA_Variance_Ratio",
-        "PCA_Cumulative_Variance_Ratio",
-        "PCA_Num_Components_Retained",
-        "PCA_Variance_Ratios",  # 各主成分方差贡献率（JSON格式）
-    "Mean_Structure_Coordinates",  # 平均构象坐标（JSON格式）
-    "Diversity_Score",
-    "Coverage_Ratio",
-    "Energy_Range",
-    "JS_Divergence",
-    "EMD_Distance",
-    "Mean_Centroid_Distance",
+        # 1) 基础标识
+        "System", "Molecule_ID", "Configuration", "Temperature(K)",
+        # 2) 规模/维度
+        "Num_Frames", "Dimension",
+        # 3) 核心结构距离指标（全集统计）
+        "RMSD_Mean", "MinD", "ANND", "MPD",
+        # 4) 多样性与覆盖 & 能量范围
+        "Diversity_Score", "Coverage_Ratio", "Energy_Range",
+        # 5) PCA 概览（先数量，再方差占比，再累积，最后数组明细）
+        "PCA_Num_Components_Retained", "PCA_Variance_Ratio", "PCA_Cumulative_Variance_Ratio", "PCA_Variance_Ratios",
+        # 6) 分布 / 采样相似性指标
+        "JS_Divergence", "EMD_Distance", "Mean_Centroid_Distance",
+        # 7) 平均结构坐标（高维 JSON 放在最后）
+        "Mean_Structure_Coordinates",
     ]
 
     SAMPLING_RECORDS_HEADERS = ["System", "System_Path", "Sampled_Frames"]  # Sampled_Frames格式: [1,5,10,15,20]
@@ -60,54 +53,42 @@ class ResultSaver:
             metrics.dimension,
         ]
 
-        # RMSD相关（原参数、采样后参数）
+        # 3) 全集核心结构距离指标
         row.extend([
             f"{metrics.rmsd_mean:.6f}",
-            f"{metrics.rmsd_mean_sampled:.6f}",
-        ])
-
-        # MinD相关（原参数、采样后参数）
-        row.extend([
             f"{metrics.MinD:.6f}",
-            f"{metrics.MinD_sampled:.6f}",
-        ])
-
-        # ANND相关（原参数、采样后参数）
-        row.extend([
             f"{metrics.ANND:.6f}",
-            f"{metrics.ANND_sampled:.6f}",
-        ])
-
-        # MPD相关（原参数、采样后参数）
-        row.extend([
             f"{metrics.MPD:.6f}",
-            f"{metrics.MPD_sampled:.6f}",
         ])
 
-        # PCA相关
         import json
         pca_variance_ratios_str = json.dumps(metrics.pca_explained_variance_ratio, ensure_ascii=False)
-        
-        # 平均构象坐标（JSON格式）
-        if metrics.mean_structure is not None:
-            mean_structure_str = json.dumps(metrics.mean_structure.tolist(), ensure_ascii=False)
-        else:
-            mean_structure_str = ""
-        
+        mean_structure_str = json.dumps(metrics.mean_structure.tolist(), ensure_ascii=False) if metrics.mean_structure is not None else ""
+
+        # 4) 多样性/覆盖/能量范围
         row.extend([
-            f"{metrics.pca_variance_ratio:.6f}",
-            f"{metrics.pca_cumulative_variance_ratio:.6f}",
-            f"{int(metrics.pca_components)}",
-            pca_variance_ratios_str,
-            mean_structure_str,
-            # Level 4 扩展：多样性 & 分布相似性（允许None -> 空字符串）
             "" if metrics.diversity_score is None else f"{metrics.diversity_score:.6f}",
             "" if metrics.coverage_ratio is None else f"{metrics.coverage_ratio:.6f}",
             "" if metrics.energy_range is None else f"{metrics.energy_range:.6f}",
+        ])
+
+        # 5) PCA 概览（数量 -> 方差 -> 累积 -> 数组）
+        row.extend([
+            f"{int(metrics.pca_components)}",
+            f"{metrics.pca_variance_ratio:.6f}",
+            f"{metrics.pca_cumulative_variance_ratio:.6f}",
+            pca_variance_ratios_str,
+        ])
+
+        # 6) 分布 / 采样相似性
+        row.extend([
             "" if metrics.js_divergence is None else f"{metrics.js_divergence:.6f}",
             "" if metrics.emd_distance is None else f"{metrics.emd_distance:.6f}",
             "" if metrics.mean_centroid_distance is None else f"{metrics.mean_centroid_distance:.6f}",
         ])
+
+        # 7) 平均构象坐标
+        row.append(mean_structure_str)
 
         return row
 
