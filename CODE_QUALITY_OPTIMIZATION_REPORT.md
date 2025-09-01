@@ -93,60 +93,18 @@ def _calculate_MinD(vector_matrix: np.ndarray) -> float:
 
 ## ⚠️ 中优先级问题 (P1)
 
-### 2. 调试输出规范化
-**问题严重程度：** 🟡 中等  
-**影响范围：** sampling_compare_demo.py, correlation_analyser.py  
-**工作量评估：** 小 (3-5天)
+### 2. 调试输出规范化 ✅ (已完成初步实施)
+已将 `sampling_compare_demo.py` 与 `correlation_analyser.py` 中的全部 `print()` 重构为集中式日志：
+- 引入 `LoggerManager.create_logger` 统一初始化
+- 按语义划分级别：error / warning / info / debug / exception
+- 去除冗余终端直接输出，确保可控、可过滤
 
-#### 问题描述
-项目中混用 `print()` 语句和 `logging` 模块进行输出：
-- `sampling_compare_demo.py` 中有20+个 `print()` 语句
-- `correlation_analyser.py` 中也有多个 `print()` 语句
-- 缺乏统一的输出格式和级别控制
+后续可选增强（未纳入当前阶段）：
+- 增加命令行参数控制日志级别
+- 为批量分析流程增加独立的模块名分层过滤
+- 引入结构化日志（JSON 格式）以便外部聚合
 
-#### 具体实例
-```python
-# sampling_compare_demo.py (第33行)
-print(f"计算基础指标时出错: {e}")
-
-# src/analysis/correlation_analyser.py (第816行)
-print(f"错误: 指定的输入文件不存在: {csv_file_path}")
-```
-
-#### 影响分析
-- **调试困难：** 无法控制输出级别
-- **日志管理：** 无法统一收集和过滤日志
-- **生产环境：** 调试信息会污染生产输出
-
-#### 解决方案
-1. **统一日志输出**
-   ```python
-   # 在所有文件中替换 print() 为 logger
-   import logging
-   logger = logging.getLogger(__name__)
-   
-   # 替换
-   print(f"错误信息: {error}") 
-   # 为
-   logger.error(f"错误信息: {error}")
-   ```
-
-2. **配置日志级别**
-   - ERROR: 错误信息
-   - WARNING: 警告信息  
-   - INFO: 重要状态信息
-   - DEBUG: 调试信息
-
-#### 实施步骤
-1. 在 `sampling_compare_demo.py` 中添加日志配置
-2. 逐个替换 `print()` 语句为相应的日志级别
-3. 在 `correlation_analyser.py` 中做相同处理
-4. 测试所有输出是否正常工作
-
-#### 预期收益
-- 统一的日志管理
-- 可配置的输出级别
-- 更好的调试体验
+原详细建议条目已移除，等待你测试验证后再确认阶段性完成。
 
 ### 3. 数据验证逻辑重复
 **问题严重程度：** 🟡 中等  

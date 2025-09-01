@@ -1,4 +1,5 @@
 import os
+import logging
 import numpy as np
 import pandas as pd
 from glob import glob
@@ -7,7 +8,11 @@ from scipy.stats import entropy, wasserstein_distance
 from sklearn.metrics import pairwise_distances
 from sklearn.decomposition import PCA
 import warnings
+from src.utils import LoggerManager
+
 warnings.filterwarnings('ignore')
+
+logger = LoggerManager.create_logger(__name__)
 
 def calc_metrics(vectors):
     """计算基础距离指标"""
@@ -29,8 +34,8 @@ def calc_metrics(vectors):
         mpd = np.mean(valid_dists) if len(valid_dists) > 0 else np.nan
         
         return min_d, annd, mpd
-    except Exception as e:
-        print(f"计算基础指标时出错: {e}")
+    except Exception:
+        logger.exception("计算基础指标时出错")
         return np.nan, np.nan, np.nan
 
 def calc_diversity_metrics(vectors):
@@ -108,8 +113,8 @@ def calc_diversity_metrics(vectors):
             if not np.all(np.isnan(energy_col)):
                 energy_range = np.ptp(energy_col[~np.isnan(energy_col)])
 
-    except Exception as e:
-        print(f"计算多样性指标时出错: {e}")
+    except Exception:
+        logger.exception("计算多样性指标时出错")
         return {
             'diversity_score': np.nan,
             'coverage_ratio': np.nan,
@@ -213,8 +218,8 @@ def calc_distribution_similarity(sample_vectors, full_vectors):
         full_centroid = np.mean(full_vectors, axis=0)
         mean_distance = np.linalg.norm(sample_centroid - full_centroid)
 
-    except Exception as e:
-        print(f"计算分布相似性时出错: {e}")
+    except Exception:
+        logger.exception("计算分布相似性时出错")
         js_divergence = np.nan
         emd_distance = np.nan
         mean_distance = np.nan
@@ -235,7 +240,7 @@ def analyse_sampling_compare(result_dir=None):
     if result_dir is None:
         dirs = sorted(glob('analysis_results/run_*'), reverse=True)
         if not dirs:
-            print("未找到分析结果，请先运行主程序。")
+            logger.warning("未找到分析结果，请先运行主程序。")
             return
         result_dir = dirs[0]
     single_dir = os.path.join(result_dir, 'single_analysis_results')
@@ -395,23 +400,23 @@ def analyse_sampling_compare(result_dir=None):
     os.makedirs(single_dir, exist_ok=True)
     out_path = os.path.join(single_dir, 'sampling_compare_enhanced.csv')
     out_df.to_csv(out_path, index=False)
-    print(f"增强版采样对比结果已保存到 {out_path}")
+    logger.info(f"增强版采样对比结果已保存到 {out_path}")
     
     # 创建均值对比汇总表格
     create_summary_table(rows, result_dir)
     
-    print(f"新增统计量包括：")
-    print(f"- 变异性指标：标准差、最小值、最大值")
-    print(f"- 多样性指标：多样性得分、覆盖率")
-    print(f"- 分布相似性：JS散度、EMD距离")
-    print(f"- RMSD指标：RMSD均值、标准差、最小值、最大值")
-    print(f"- 相对性能：改进百分比、统计显著性")
-    print(f"- 效率指标：采样率、帧数统计")
+    logger.info("新增统计量包括：")
+    logger.info("- 变异性指标：标准差、最小值、最大值")
+    logger.info("- 多样性指标：多样性得分、覆盖率")
+    logger.info("- 分布相似性：JS散度、EMD距离")
+    logger.info("- RMSD指标：RMSD均值、标准差、最小值、最大值")
+    logger.info("- 相对性能：改进百分比、统计显著性")
+    logger.info("- 效率指标：采样率、帧数统计")
 
 def create_summary_table(rows, result_dir):
     """创建均值对比汇总表格"""
     if not rows:
-        print("警告：没有数据行，无法创建汇总表格")
+        logger.warning("没有数据行，无法创建汇总表格")
         return
     
     # 定义需要汇总的指标
@@ -433,26 +438,25 @@ def create_summary_table(rows, result_dir):
         ('RMSD_Mean', 'RMSD_Mean_sampled', 'RMSD_random_mean', 'RMSD_Mean_uniform'),
     ]
     
-    print(f"开始处理 {len(rows)} 个系统的数据...")
+    logger.info(f"开始处理 {len(rows)} 个系统的数据...")
     
     # 检查是否有数据
     if len(rows) == 0:
-        print("错误：没有系统数据")
+        logger.error("没有系统数据")
         return
     
     # 检查第一行数据的结构
     if rows:
         sample_keys = list(rows[0].keys())
-        print(f"数据行包含的列：{sample_keys}")
-        
+        logger.debug(f"数据行包含的列：{sample_keys}")
         # 检查关键列是否存在
         key_columns = ['MinD_sampled', 'MinD_random_mean', 'MinD_uniform', 'RMSD_Mean_sampled', 'MPD_sampled', 'MPD_random_mean']
         for col in key_columns:
             if col in sample_keys:
                 value = rows[0][col]
-                print(f"示例值 {col}: {value} (类型: {type(value)})")
+                logger.debug(f"示例值 {col}: {value} (类型: {type(value)})")
             else:
-                print(f"警告：缺少列 {col}")
+                logger.warning(f"缺少列 {col}")
     
     # 计算每个指标的均值和标准差
     summary_data = {}
@@ -462,17 +466,17 @@ def create_summary_table(rows, result_dir):
         sampled_values = [row[sampled_col] for row in rows if not np.isnan(row.get(sampled_col, np.nan))]
         random_values = [row[random_col] for row in rows if not np.isnan(row.get(random_col, np.nan))]
         uniform_values = [row[uniform_col] for row in rows if not np.isnan(row.get(uniform_col, np.nan))]
-        
-        print(f"{metric_name}: Sampled={len(sampled_values)}, Random={len(random_values)}, Uniform={len(uniform_values)}")
-        
+
+        logger.info(f"{metric_name}: Sampled={len(sampled_values)}, Random={len(random_values)}, Uniform={len(uniform_values)}")
+
         # 调试信息
         if len(sampled_values) > 0:
-            print(f"  Sampled values range: {np.min(sampled_values):.6f} - {np.max(sampled_values):.6f}")
+            logger.debug(f"Sampled values range: {np.min(sampled_values):.6f} - {np.max(sampled_values):.6f}")
         if len(random_values) > 0:
-            print(f"  Random values range: {np.min(random_values):.6f} - {np.max(random_values):.6f}")
+            logger.debug(f"Random values range: {np.min(random_values):.6f} - {np.max(random_values):.6f}")
         if len(uniform_values) > 0:
-            print(f"  Uniform values range: {np.min(uniform_values):.6f} - {np.max(uniform_values):.6f}")
-        
+            logger.debug(f"Uniform values range: {np.min(uniform_values):.6f} - {np.max(uniform_values):.6f}")
+
         # 计算均值和标准差
         summary_data[f'{metric_name}_Sampled_Mean'] = np.mean(sampled_values) if sampled_values else np.nan
         summary_data[f'{metric_name}_Sampled_Std'] = np.std(sampled_values, ddof=1) if len(sampled_values) >= 2 else (np.std(sampled_values, ddof=0) if len(sampled_values) == 1 else np.nan)
@@ -504,8 +508,8 @@ def create_summary_table(rows, result_dir):
     os.makedirs(combined_dir, exist_ok=True)
     summary_path = os.path.join(combined_dir, 'sampling_methods_comparison.csv')
     summary_df.to_csv(summary_path, index=False)
-    print(f"均值对比汇总表格已保存到 {summary_path}")
-    print(f"汇总了 {len(rows)} 个系统的数据")
+    logger.info(f"均值对比汇总表格已保存到 {summary_path}")
+    logger.info(f"汇总了 {len(rows)} 个系统的数据")
 
 if __name__ == '__main__':
     analyse_sampling_compare()

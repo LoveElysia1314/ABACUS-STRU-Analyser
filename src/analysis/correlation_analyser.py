@@ -813,17 +813,20 @@ def main():
     if args.input:
         csv_file_path = args.input
         if not os.path.exists(csv_file_path):
-            print(f"错误: 指定的输入文件不存在: {csv_file_path}")
+            logger = logging.getLogger(__name__)
+            logger.error(f"错误: 指定的输入文件不存在: {csv_file_path}")
             sys.exit(1)
     else:
         # 自动查找
         csv_file_path = find_system_metrics_csv()
         if csv_file_path is None:
-            print("错误: 未找到 system_metrics_summary.csv 文件")
-            print("请使用 -i 参数指定输入文件路径")
+            logger = logging.getLogger(__name__)
+            logger.error("未找到 system_metrics_summary.csv 文件")
+            logger.error("请使用 -i 参数指定输入文件路径")
             sys.exit(1)
         else:
-            print(f"自动找到输入文件: {csv_file_path}")
+            logger = logging.getLogger(__name__)
+            logger.info(f"自动找到输入文件: {csv_file_path}")
 
     # 设置日志 - 默认启用文件日志
     if args.no_log_file:
@@ -842,21 +845,22 @@ def main():
     # 创建分析器并执行分析
     analyser = CorrelationAnalyser(logger=logger)
 
-    print(f"开始分析文件: {csv_file_path}")
-    print(f"输出目录: {args.output}")
+    log_runtime = logging.getLogger("CorrelationAnalyserRuntime")
+    log_runtime.info(f"开始分析文件: {csv_file_path}")
+    log_runtime.info(f"输出目录: {args.output}")
     if not args.no_log_file:
-        print("日志文件: analysis_results/correlation_analysis.log")
+        log_runtime.info("日志文件: analysis_results/correlation_analysis.log")
 
     success = analyser.analyse_correlations(csv_file_path, args.output)
 
     if success:
-        print(f"\n分析完成！结果已保存到: {args.output}")
-        print("输出文件:")
-        print(f"  - {os.path.join(args.output, 'parameter_analysis_results.csv')} (整合数值和可读信息)")
+        log_runtime.info(f"分析完成，结果已保存到: {args.output}")
+        log_runtime.info("输出文件:")
+        log_runtime.info(f"  - {os.path.join(args.output, 'parameter_analysis_results.csv')} (整合数值和可读信息)")
         if not args.no_log_file:
-            print("  - analysis_results/correlation_analysis.log")
+            log_runtime.info("  - analysis_results/correlation_analysis.log")
     else:
-        print("分析失败，请检查输入文件格式和内容")
+        log_runtime.error("分析失败，请检查输入文件格式和内容")
         sys.exit(1)
 
 
