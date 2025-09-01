@@ -12,7 +12,8 @@ import argparse
 import logging
 import multiprocessing as mp
 import glob
-from typing import List
+import json
+from typing import List, Dict, Optional
 
 # 导入自定义模块
 from src.utils import DirectoryDiscovery
@@ -30,36 +31,30 @@ except ImportError:
     CORRELATION_ANALYSER_AVAILABLE = False
 
 
-def _worker_analyse_system(system_path: str, sample_ratio: float, power_p: float, pca_variance_ratio: float):
-    """Top-level worker function for multiprocessing.
-
-    Creates a local SystemAnalyser in the child process to avoid pickling
-    the parent-process analyser instance.
-    """
-    analyser = SystemAnalyser(
-        include_hydrogen=False,
-        sample_ratio=sample_ratio,
-        power_p=power_p,
-        pca_variance_ratio=pca_variance_ratio
-    )
-    return analyser.analyse_system(system_path)
+def _worker_analyse_system(system_path: str, sample_ratio: float, power_p: float, pca_variance_ratio: float,
+                           pre_sampled_frames: Optional[List[int]] = None):
+    """备用工作函数：独立创建分析器并执行，支持预设采样帧复用。"""
+    analyser = SystemAnalyser(include_hydrogen=False,
+                              sample_ratio=sample_ratio,
+                              power_p=power_p,
+                              pca_variance_ratio=pca_variance_ratio)
+    return analyser.analyse_system(system_path, pre_sampled_frames=pre_sampled_frames)
 
 
-# Globals used when initializing analysers inside worker processes
-_GLOBAL_ANALYSER = None
+_GLOBAL_ANALYSER = None  # 子进程分析器实例
+_GLOBAL_REUSE_MAP: Dict[str, List[int]] = {}  # system_name -> sampled_frames
 
 
-def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float, log_queue: mp.Queue = None):
-    """Initializer for worker processes: create one SystemAnalyser per process and setup logging."""
-    global _GLOBAL_ANALYSER
+def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float,
+                reuse_map: Dict[str, List[int]], log_queue: mp.Queue = None):
+    """工作进程初始化：创建分析器并记录采样复用映射。"""
+    global _GLOBAL_ANALYSER, _GLOBAL_REUSE_MAP
 
-    # Create analyser
-    _GLOBAL_ANALYSER = SystemAnalyser(
-        include_hydrogen=False,
-        sample_ratio=sample_ratio,
-        power_p=power_p,
-        pca_variance_ratio=pca_variance_ratio
-    )
+    _GLOBAL_ANALYSER = SystemAnalyser(include_hydrogen=False,
+                                      sample_ratio=sample_ratio,
+                                      power_p=power_p,
+                                      pca_variance_ratio=pca_variance_ratio)
+    _GLOBAL_REUSE_MAP = reuse_map or {}
 
     # Setup multiprocess logging for worker
     if log_queue is not None:
@@ -73,15 +68,13 @@ def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float, 
 
 
 def _child_worker(system_path: str):
-    """Worker that uses the per-process analyser set by _child_init.
-
-    Returns the same tuple result as SystemAnalyser.analyse_system.
-    """
-    global _GLOBAL_ANALYSER
+    """工作进程执行函数（支持采样帧复用）。"""
+    global _GLOBAL_ANALYSER, _GLOBAL_REUSE_MAP
     if _GLOBAL_ANALYSER is None:
-        # Fallback: construct a temporary analyser (shouldn't happen when Pool initializer used)
-        return _worker_analyse_system(system_path, 0.05, 0.5, 0.90)
-    return _GLOBAL_ANALYSER.analyse_system(system_path)
+        return _worker_analyse_system(system_path, 0.05, 0.5, 0.90, pre_sampled_frames=None)
+    sys_name = os.path.basename(system_path.rstrip('/\\'))
+    pre_frames = _GLOBAL_REUSE_MAP.get(sys_name)
+    return _GLOBAL_ANALYSER.analyse_system(system_path, pre_sampled_frames=pre_frames)
 
 
 class MainApp:
@@ -93,15 +86,13 @@ class MainApp:
     def run(self) -> None:
         """运行主程序"""
         start_time = time.time()
-        
         # 解析命令行参数
         args = self._parse_arguments()
-        
+
         # 配置多进程安全日志系统
         analysis_results_dir = os.path.join(FileUtils.get_project_root(), "analysis_results")
         os.makedirs(analysis_results_dir, exist_ok=True)
 
-        # 创建多进程日志队列和监听器
         self.log_queue, self.log_listener = LoggerManager.create_multiprocess_logging_setup(
             output_dir=analysis_results_dir,
             log_filename="main.log",
@@ -238,19 +229,44 @@ class MainApp:
             pca_variance_ratio=args.pca_variance_ratio
         )
         
+        # 采样复用判定（不改变 completed 判定，只决定是否跳过采样算法）
+        reuse_map = path_manager.determine_sampling_reuse()
+        self.logger.info(f"采样复用判定完成：可复用 {len(reuse_map)} / {len(path_manager.targets)} 个系统的采样帧")
+
+        # 确保复用采样的系统仍被分析（只跳过采样，不跳过其余计算）
+        for t in path_manager.targets:
+            if t.reuse_sampling and t.status == 'completed':
+                # 如果因为旧逻辑被标 completed，但我们只想复用采样，仍需重新计算其它结果
+                t.status = 'pending'
+                self.logger.debug(f"复用采样但强制重算其它结果: {t.system_name}")
+
+        # Dry-run: 仅输出复用计划并退出
+        if getattr(args, 'dry_run_reuse', False):
+            plan = {
+                "total_targets": len(path_manager.targets),
+                "reused_sampling_systems": list(reuse_map.keys()),
+                "reused_count": len(reuse_map),
+                "resample_systems": [t.system_name for t in path_manager.targets if t.system_name not in reuse_map]
+            }
+            plan_path = os.path.join(actual_output_dir, 'sampling_reuse_plan.json')
+            with open(plan_path, 'w', encoding='utf-8') as f:
+                json.dump(plan, f, ensure_ascii=False, indent=2)
+            self.logger.info(f"Dry-Run 完成：已生成采样复用计划 {plan_path} ，复用 {plan['reused_count']} 个，重采样 {len(plan['resample_systems'])} 个。")
+            return
+
         analysis_targets = path_manager.get_targets_by_status("pending") + path_manager.get_targets_by_status("failed")
         system_paths = [target.system_path for target in analysis_targets]
         completed_count = len(path_manager.get_targets_by_status("completed"))
-        
+
         self.logger.info(f"准备分析 {len(system_paths)} 个系统（已完成: {completed_count}，待处理: {len(system_paths)}）...")
         
         # 执行分析
         if workers > 1:
-            self.logger.info(f"使用并行分析模式（{workers} 个工作进程）...")
-            analysis_results = self._parallel_analysis(analyser, system_paths, path_manager, workers)
+            self.logger.info(f"使用并行分析模式（{workers} 个工作进程，支持采样复用）...")
+            analysis_results = self._parallel_analysis(analyser, system_paths, path_manager, workers, reuse_map)
         else:
             self.logger.info("使用顺序分析模式...")
-            analysis_results = self._sequential_analysis(analyser, system_paths, path_manager)
+            analysis_results = self._sequential_analysis(analyser, system_paths, path_manager, reuse_map)
         
         # 步骤5: 保存结果
         if analysis_results:
@@ -310,14 +326,11 @@ class MainApp:
         parser.add_argument('-p', '--power_p', type=float, default=-0.5, help='幂平均距离的p值')
         parser.add_argument('-v', '--pca_variance_ratio', type=float, default=0.90, help='PCA降维累计方差贡献率 (0~1, 默认: 0.90)')
         parser.add_argument('-w', '--workers', type=int, default=-1, help='并行工作进程数')
-        parser.add_argument('-o', '--output_dir', type=str, default="analysis_results", help='输出根目录')
-        parser.add_argument('-s', '--search_path', nargs='*', default=None, 
-                           help='递归搜索路径，支持多个路径和通配符 (默认为当前目录的父目录)')
-        parser.add_argument('-i', '--include_project', action='store_true', 
-                           help='允许搜索项目自身目录（默认屏蔽）')
-    # `--skip_single_results` 已移除；程序始终生成单体系详细结果
-        parser.add_argument('-f', '--force_recompute', action='store_true',
-                           help='强制重新计算所有系统，忽略已有的分析结果')
+        parser.add_argument('-o', '--output_dir', type=str, default='analysis_results', help='输出根目录')
+        parser.add_argument('-s', '--search_path', nargs='*', default=None, help='递归搜索路径，支持多个路径和通配符 (默认为当前目录的父目录)')
+        parser.add_argument('-i', '--include_project', action='store_true', help='允许搜索项目自身目录（默认屏蔽）')
+        parser.add_argument('-f', '--force_recompute', action='store_true', help='强制重新计算所有系统，忽略已有的分析结果')
+        parser.add_argument('--dry_run_reuse', action='store_true', help='仅评估采样复用计划并输出 sampling_reuse_plan.json 后退出')
         return parser.parse_args()
     
     def _determine_workers(self, workers_arg: int) -> int:
@@ -390,12 +403,10 @@ class MainApp:
         return all_mol_systems
     
     def _parallel_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
-                          path_manager: PathManager, workers: int) -> List[tuple]:
-        """并行分析系统"""
+                          path_manager: PathManager, workers: int, reuse_map: Dict[str, List[int]]) -> List[tuple]:
+        """并行分析系统（支持采样帧复用）"""
         analysis_results = []
-        # Use a Pool initializer to create one SystemAnalyser per worker process and
-        # use imap_unordered with a calculated chunksize for better throughput.
-        initializer_args = (analyser.sample_ratio, analyser.power_p, analyser.pca_variance_ratio, self.log_queue)
+        initializer_args = (analyser.sample_ratio, analyser.power_p, analyser.pca_variance_ratio, reuse_map, self.log_queue)
         chunksize = max(1, len(system_paths) // (workers * 4)) if system_paths else 1
 
         with mp.Pool(processes=workers, initializer=_child_init, initargs=initializer_args) as pool:
@@ -431,23 +442,29 @@ class MainApp:
         return analysis_results
     
     def _sequential_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
-                           path_manager: PathManager) -> List[tuple]:
-        """顺序分析系统"""
+                           path_manager: PathManager, reuse_map: dict = None) -> List[tuple]:
+        """顺序分析系统（支持采样复用）"""
+        reuse_map = reuse_map or {}
+        # 构建 system_path -> pre_sampled_frames
+        path_to_presampled = {}
+        for t in path_manager.targets:
+            if t.system_path and t.system_name in reuse_map:
+                path_to_presampled[t.system_path] = reuse_map[t.system_name]
+
         analysis_results = []
-        
         for i, system_path in enumerate(system_paths):
             try:
                 path_manager.update_target_status(system_path, "processing")
-                
-                result = analyser.analyse_system(system_path)
+                pre_frames = path_to_presampled.get(system_path)
+                result = analyser.analyse_system(system_path, pre_sampled_frames=pre_frames)
                 if result:
                     analysis_results.append(result)
                     path_manager.update_target_status(system_path, "completed")
-                    self.logger.info(f"分析完成 ({i+1}/{len(system_paths)}): {result[0].system_name}")
+                    mode = "复用采样" if pre_frames else "重新采样"
+                    self.logger.info(f"分析完成 ({i+1}/{len(system_paths)}): {result[0].system_name} [{mode}]")
                 else:
                     path_manager.update_target_status(system_path, "failed")
                     self.logger.warning(f"分析失败 ({i+1}/{len(system_paths)}): {system_path}")
-                    
             except Exception as e:
                 path_manager.update_target_status(system_path, "failed")
                 ErrorHandler.log_detailed_error(
@@ -457,7 +474,6 @@ class MainApp:
                         "系统路径": system_path
                     }
                 )
-        
         return analysis_results
     
     def _run_correlation_analysis(self, output_dir: str) -> None:

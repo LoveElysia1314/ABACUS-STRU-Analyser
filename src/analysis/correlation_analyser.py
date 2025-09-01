@@ -76,14 +76,10 @@ class CorrelationAnalyser:
 
         # 定义分析指标（原参数和采样后参数）
         self.indicators = [
-            "RMSD_Mean",  # RMSD均值（原参数）
-            "RMSD_Mean_Sampled",  # RMSD均值（采样后参数）
-            "MinD",  # 最小间距（原参数）
-            "MinD_Sampled",  # 最小间距（采样后参数）
-            "ANND",  # 平均最近邻距离（原参数）
-            "ANND_Sampled",  # 平均最近邻距离（采样后参数）
-            "MPD",  # 平均成对距离（原参数）
-            "MPD_Sampled",  # 平均成对距离（采样后参数）
+            "RMSD_Mean",
+            "MinD",
+            "ANND",
+            "MPD",
         ]
 
     def _create_default_logger(self) -> logging.Logger:

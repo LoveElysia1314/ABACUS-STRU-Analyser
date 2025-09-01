@@ -30,6 +30,8 @@ __all__ = [
     "create_standard_logger",
     # Constants (if needed)
     "Constants",
+    # Mean structure manager
+    "MeanStructureManager",
 ]
 
 
@@ -95,84 +97,122 @@ class DirectoryDiscovery:
 
         return sorted(structure_dirs)
 
+    # ---- Newly integrated advanced discovery helpers (moved from MeanStructureManager) ----
     @staticmethod
     def find_abacus_systems(search_path: str = ".", include_project: bool = False) -> dict:
-        """Find ABACUS systems organized by molecule ID
-        
-        Args:
-            search_path: Path to search in
-            include_project: Whether to include project directories
-            
-        Returns:
-            Dictionary mapping molecule IDs to system paths
+        """Find ABACUS systems organized by molecule ID.
+
+        Returns dict[molecule_id] -> list[system_dir].
         """
         import glob
         import os
         import re
 
         mol_systems = {}
-        
-        # Search for ABACUS output directories with STRU subdirectories
         pattern = os.path.join(search_path, "**", Constants.OUTPUT_DIR_PATTERN, "STRU")
-        
         for stru_dir in glob.glob(pattern, recursive=True):
             if os.path.isdir(stru_dir):
-                # Check if contains STRU_MD_* files
-                stru_files = glob.glob(
-                    os.path.join(stru_dir, Constants.STRU_FILE_PATTERN)
-                )
-                if stru_files:
-                    # Get system directory (grandparent of STRU)
-                    system_dir = os.path.dirname(os.path.dirname(stru_dir))
-                    
-                    # Filter out project directories if needed
-                    if not include_project and DirectoryDiscovery._is_project_directory(system_dir):
-                        continue
-                    
-                    # Extract molecule ID from path
-                    mol_id = DirectoryDiscovery._extract_molecule_id(system_dir)
-                    
-                    if mol_id not in mol_systems:
-                        mol_systems[mol_id] = []
-                    mol_systems[mol_id].append(system_dir)
-        
-        # Sort systems within each molecule
+                stru_files = glob.glob(os.path.join(stru_dir, Constants.STRU_FILE_PATTERN))
+                if not stru_files:
+                    continue
+                system_dir = os.path.dirname(os.path.dirname(stru_dir))
+                if (not include_project) and DirectoryDiscovery._is_project_directory(system_dir):
+                    continue
+                mol_id = DirectoryDiscovery._extract_molecule_id(system_dir)
+                mol_systems.setdefault(mol_id, []).append(system_dir)
         for mol_id in mol_systems:
             mol_systems[mol_id] = sorted(mol_systems[mol_id])
-            
         return mol_systems
-    
+
     @staticmethod
     def _extract_molecule_id(system_path: str) -> str:
-        """Extract molecule ID from system path"""
         import re
         import os
-        
-        # Try to extract from directory name patterns like struct_mol_XXX
         dirname = os.path.basename(system_path)
-        match = re.search(r'mol_(\d+)', dirname)
+        match = re.search(r"mol_(\d+)", dirname)
         if match:
             return match.group(1)
-        
-        # Fallback: use directory name
         return dirname
-    
+
     @staticmethod
     def _is_project_directory(system_path: str) -> bool:
-        """Check if directory appears to be a project directory"""
         import os
-        
         dirname = os.path.basename(system_path).lower()
         project_patterns = [
-            'abacus-stru-analyser', 'analyser', 'analyser',
+            'abacus-stru-analyser', 'analyser', 'analysis',
             'test', 'demo', 'example', 'sample'
         ]
-        
-        # Don't filter out struct_mol_XXX directories - these are actual data
         if dirname.startswith('struct_mol_'):
             return False
-            
-        return any(pattern in dirname for pattern in project_patterns)
+        return any(p in dirname for p in project_patterns)
+
+
+class MeanStructureManager:
+    """统一加载与访问均值构象数据的辅助类。
+
+    目标：在分析阶段导出的 mean_structures/mean_structure_<system>.json 可被后续
+    采样验证脚本、可视化、下游模型处理直接复用，而无需重新迭代对齐。
+    """
+
+    @staticmethod
+    def load_mean_structure(run_dir: str, system_name: str):
+        """加载指定体系的均值构象与元数据。
+
+        Returns:
+            (mean_structure_np, meta_dict) or (None, None)
+        """
+        import os, json, numpy as np
+        path = os.path.join(run_dir, 'mean_structures', f'mean_structure_{system_name}.json')
+        if not os.path.exists(path):
+            return None, None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            ms = np.array(data.get('mean_structure', []), dtype=float)
+            return ms, data
+        except Exception:
+            return None, None
+
+    @staticmethod
+    def list_available(run_dir: str):
+        """列出当前 run 目录下可用的均值构象 system 名称列表。"""
+        import os, re
+        mean_dir = os.path.join(run_dir, 'mean_structures')
+        if not os.path.isdir(mean_dir):
+            return []
+        names = []
+        for fn in os.listdir(mean_dir):
+            if fn.startswith('mean_structure_') and fn.endswith('.json'):
+                sys_name = fn[len('mean_structure_'):-5]
+                # 基本格式校验
+                if re.match(r"struct_mol_\d+_conf_\d+_T\d+K", sys_name):
+                    names.append(sys_name)
+        return sorted(names)
+
+    @staticmethod
+    def ensure_loaded_or_compute(run_dir: str, system_dir: str, recompute_fn=None):
+        """确保获得均值构象；若不存在且提供 recompute_fn 则调用生成。
+
+        recompute_fn: callable -> (mean_structure: np.ndarray)
+        返回 (mean_structure_np or None)
+        """
+        import os
+        system_name = os.path.basename(system_dir.rstrip("/\\"))
+        ms, _ = MeanStructureManager.load_mean_structure(run_dir, system_name)
+        if ms is not None:
+            return ms
+        if recompute_fn is not None:
+            try:
+                ms = recompute_fn()
+                return ms
+            except Exception:
+                return None
+        return None
+
+    # ---- Compatibility alias for discovery helpers ----
+    @staticmethod
+    def find_abacus_systems(search_path: str = ".", include_project: bool = False) -> dict:  # pragma: no cover - thin wrapper
+        return DirectoryDiscovery.find_abacus_systems(search_path, include_project)
 
 
 # For even better backward compatibility, create aliases for the old utils.py functions

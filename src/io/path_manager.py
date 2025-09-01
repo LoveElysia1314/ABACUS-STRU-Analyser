@@ -23,6 +23,7 @@ class AnalysisTarget:
     status: str = "pending"
     source_hash: str = ""  # 源文件哈希，用于检测源数据变更
     sampled_frames: List[int] = None  # 采样帧编号列表
+    reuse_sampling: bool = False  # 是否复用既有采样结果（跳过采样算法）
 
     def __post_init__(self):
         if self.sampled_frames is None:
@@ -596,11 +597,11 @@ class PathManager:
             except Exception as e:
                 self.logger.warning(f"读取汇总结果文件失败: {str(e)}")
 
-        # 检查每个目标
-        for target in self.targets:
-            if target.status in ["completed", "failed"]:
-                continue  # 已标记为完成或失败，跳过检查
+        # 预计算均值结构目录
+        mean_struct_dir = os.path.join(self.output_dir, 'mean_structures')
 
+        # 检查每个目标（即便标记为 completed 也要重新验证文件是否仍然存在；防止只剩 analysis_targets.json 的情况导致跳过重算）
+        for target in self.targets:
             system_name = target.system_name
             system_path = target.system_path
 
@@ -614,6 +615,10 @@ class PathManager:
                 f"frame_metrics_{system_name}.csv",
             )
             has_frame_metrics = os.path.exists(frame_metrics_file)
+
+            # 检查均值结构JSON（复用构象平均）
+            mean_struct_path = os.path.join(mean_struct_dir, f"mean_structure_{system_name}.json")
+            has_mean_struct = os.path.exists(mean_struct_path)
 
             # 检查源文件哈希是否匹配（从当前目录的targets文件）
             hash_matches = True
@@ -637,15 +642,23 @@ class PathManager:
                 except Exception as e:
                     self.logger.warning(f"读取历史哈希信息失败: {str(e)}")
 
-            # 如果同时满足条件且哈希匹配，标记为已完成
-            if has_summary and has_frame_metrics and hash_matches:
+            # 如果同时满足条件且哈希匹配（并包含均值结构），标记为已完成
+            if has_summary and has_frame_metrics and has_mean_struct and hash_matches:
+                if target.status != "completed":
+                    updated_count += 1
                 target.status = "completed"
-                updated_count += 1
-                self.logger.info(f"检测到已完成的分析结果: {system_name}")
-            elif has_summary and has_frame_metrics and not hash_matches:
-                # 有结果但源文件已变更，重置为待处理
+                self.logger.info(f"检测到已完成的分析结果(含均值结构): {system_name}")
+            else:
+                # 任何缺失、哈希不匹配或文件被删都触发重算
+                if target.status == "completed":
+                    self.logger.warning(
+                        f"结果文件缺失或哈希不匹配，已从 completed 复位为 pending: {system_name}"
+                    )
+                if has_summary and has_frame_metrics and has_mean_struct and not hash_matches:
+                    self.logger.info(f"源文件已变更，重新分析: {system_name}")
+                elif has_summary and has_frame_metrics and not has_mean_struct:
+                    self.logger.debug(f"复用条件缺失(无均值结构)，需重新计算: {system_name}")
                 target.status = "pending"
-                self.logger.info(f"源文件已变更，重新分析: {system_name}")
 
         if updated_count > 0:
             self.logger.info(
@@ -657,6 +670,70 @@ class PathManager:
             )
         if updated_count == 0 and hash_mismatch_count == 0:
             self.logger.info("增量计算: 未发现已完成的分析结果，将进行完整计算")
+
+    # 新增：仅基于 analysis_targets.json + 源数据哈希 判定是否复用采样结果；不跳过其它计算
+    def determine_sampling_reuse(self) -> dict:
+        """确定哪些系统可以复用采样结果。
+
+        复用条件:
+          1) analysis_targets.json 存在且包含系统记录
+          2) 记录中含 sampled_frames 且非空
+          3) 记录中的 source_hash == 当前重新计算的 source_hash
+
+        满足后:
+          - target.sampled_frames 赋值为历史采样帧
+          - target.reuse_sampling = True
+          - target.status 保持 pending (仍会重算指标/均值结构/CSV导出)
+
+        Returns:
+          dict[system_name] -> List[int]  (可复用的采样帧列表)
+        """
+        reuse_map = {}
+        if not self.targets or not self.targets_file or not os.path.exists(self.targets_file):
+            return reuse_map
+        try:
+            with open(self.targets_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            molecules = data.get('molecules', {})
+            # 构建两个索引：system_path 与 system_name，防止路径层级或大小写差异导致失配
+            path_index = {}
+            name_index = {}
+            for mol in molecules.values():
+                for sys_name, sys_data in mol.get('systems', {}).items():
+                    rec = (
+                        sys_data.get('sampled_frames'),
+                        sys_data.get('source_hash','')
+                    )
+                    sys_path = sys_data.get('system_path','')
+                    if sys_path:
+                        path_index[os.path.normpath(sys_path).lower()] = rec
+                    name_index[sys_name] = rec
+            for target in self.targets:
+                rec = path_index.get(os.path.normpath(target.system_path).lower())
+                if rec is None:
+                    rec = name_index.get(target.system_name)
+                if rec is None:
+                    continue
+                sampled_raw, old_hash = rec
+                # 解析紧凑JSON字符串
+                if isinstance(sampled_raw, str):
+                    try:
+                        sampled_frames = json.loads(sampled_raw)
+                    except Exception:
+                        sampled_frames = []
+                else:
+                    sampled_frames = sampled_raw or []
+                if (sampled_frames and old_hash and old_hash == target.source_hash):
+                    target.sampled_frames = sampled_frames
+                    target.reuse_sampling = True
+                    reuse_map[target.system_name] = sampled_frames
+            if reuse_map:
+                self.logger.info(f"采样复用: {len(reuse_map)} 个系统将跳过采样算法，仅更新其余输出")
+            else:
+                self.logger.info("采样复用: 未发现可复用的采样结果")
+        except Exception as e:
+            self.logger.warning(f"解析已有采样结果失败: {e}")
+        return reuse_map
 
     def load_sampled_frames_from_csv(self) -> None:
         """从single_analysis_results中的CSV文件加载采样帧信息"""

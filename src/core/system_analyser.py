@@ -149,7 +149,7 @@ class SystemAnalyser:
         self.pca_reducer = PCAReducer(pca_variance_ratio)
         self.logger = logging.getLogger(__name__)
 
-    def analyse_system(self, system_dir: str) -> Optional[Tuple]:
+    def analyse_system(self, system_dir: str, pre_sampled_frames: Optional[List[int]] = None) -> Optional[Tuple]:
         system_info = self._extract_system_info(system_dir)
         if not system_info:
             return None
@@ -188,11 +188,10 @@ class SystemAnalyser:
 
         vector_matrix = np.array(vector_matrix)
         metrics.dimension = min_dim
-        
+
         # 应用PCA降维
         reduced_matrix, pca_model = self.pca_reducer.apply_pca_reduction(vector_matrix)
         # 设置PCA相关字段
-        # 记录本次用于降维的目标累计方差贡献率（按体系保存）
         metrics.pca_variance_ratio = float(self.pca_variance_ratio)
         if pca_model is not None:
             metrics.pca_components = pca_model.n_components_
@@ -223,7 +222,7 @@ class SystemAnalyser:
             metrics.rmsd_per_frame = []
             metrics.mean_structure = None
 
-        # 构建包含能量、力和PCA分量的综合向量
+        # 构建包含能量与PCA分量的综合向量（不做磁盘缓存，重算成本低）
         comprehensive_matrix = self.build_comprehensive_vectors(frames, reduced_matrix)
 
         # 设置综合向量相关字段
@@ -246,39 +245,43 @@ class SystemAnalyser:
         # 提取PCA分量用于保存（保持原有逻辑）
         pca_components_data = self.pca_reducer.extract_pca_components(reduced_matrix, frames)
 
-        k = max(2, int(round(self.sample_ratio * metrics.num_frames)))
         swap_count, improve_ratio = 0, 0.0
-        if k < metrics.num_frames:
-            # 使用新的采样策略：基于MinD和ANND优化（使用综合向量）
-            sampled_indices, swap_count, improve_ratio = PowerMeanSampler.select_frames(
-                comprehensive_matrix, k, p=self.power_p
-            )
-            metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
-            sampled_vectors = comprehensive_matrix[sampled_indices]
-            sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
-            # 采样 vs 全集分布相似性
-            try:
-                sim = compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
-                metrics.set_distribution_similarity(sim)
-            except Exception:
-                pass
-            metrics.set_sampled_metrics(sampled_metrics)
-
-            # 计算采样后帧的RMSD均值
-            if len(metrics.rmsd_per_frame) > 0 and len(sampled_indices) > 0:
-                sampled_rmsd_values = [metrics.rmsd_per_frame[i] for i in sampled_indices if i < len(metrics.rmsd_per_frame)]
-                if sampled_rmsd_values:
-                    metrics.rmsd_mean_sampled = float(np.mean(sampled_rmsd_values))
-                    self.logger.info(f"采样后RMSD计算完成: 均值={metrics.rmsd_mean_sampled:.4f}, 采样帧数={len(sampled_rmsd_values)}")
-                else:
-                    metrics.rmsd_mean_sampled = 0.0
+        if pre_sampled_frames is not None and len(pre_sampled_frames) > 0:
+            # 复用采样结果：保持输入顺序过滤存在的帧
+            existing_ids = {f.frame_id: idx for idx, f in enumerate(frames)}
+            sampled_indices = [existing_ids[fid] for fid in pre_sampled_frames if fid in existing_ids]
+            if not sampled_indices:
+                # 回退到重新采样
+                pre_sampled_frames = None
             else:
-                metrics.rmsd_mean_sampled = 0.0
-        else:
-            metrics.sampled_frames = [f.frame_id for f in frames]
-            metrics.set_sampled_metrics(original_metrics)
-            # 如果没有采样，采样后RMSD均值等于总体RMSD均值
-            metrics.rmsd_mean_sampled = metrics.rmsd_mean
+                metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
+                sampled_vectors = comprehensive_matrix[sampled_indices] if len(sampled_indices) > 0 else comprehensive_matrix
+                sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
+                try:
+                    sim = compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
+                    metrics.set_distribution_similarity(sim)
+                except Exception:
+                    pass
+                metrics.set_sampled_metrics(sampled_metrics)
+
+        if pre_sampled_frames is None:
+            k = max(2, int(round(self.sample_ratio * metrics.num_frames)))
+            if k < metrics.num_frames:
+                sampled_indices, swap_count, improve_ratio = PowerMeanSampler.select_frames(
+                    comprehensive_matrix, k, p=self.power_p
+                )
+                metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
+                sampled_vectors = comprehensive_matrix[sampled_indices]
+                sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
+                try:
+                    sim = compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
+                    metrics.set_distribution_similarity(sim)
+                except Exception:
+                    pass
+                metrics.set_sampled_metrics(sampled_metrics)
+            else:
+                metrics.sampled_frames = [f.frame_id for f in frames]
+                metrics.set_sampled_metrics(original_metrics)
         return metrics, frames, swap_count, improve_ratio, pca_components_data, pca_model, metrics.rmsd_per_frame
 
     def build_comprehensive_vectors(self, frames: List, reduced_matrix: np.ndarray) -> np.ndarray:

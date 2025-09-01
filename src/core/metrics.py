@@ -101,14 +101,10 @@ class TrajectoryMetrics:
         self.MinD = 0.0
         self.ANND = 0.0
         self.MPD = 0.0
-        self.MinD_sampled = 0.0
-        self.ANND_sampled = 0.0
-        self.MPD_sampled = 0.0
         self.sampled_frames = []
         # RMSD相关字段
         self.rmsd_mean = 0.0  # RMSD均值（总体指标）
         self.rmsd_per_frame = []  # 每帧RMSD（单帧指标）
-        self.rmsd_mean_sampled = 0.0  # 采样后RMSD均值
         # PCA相关字段
         self.pca_variance_ratio = 0.0  # PCA目标方差贡献率
         self.pca_explained_variance_ratio = []  # 各主成分方差贡献率
@@ -156,10 +152,9 @@ class TrajectoryMetrics:
         self.MPD = metrics_data["MPD"]
 
     def set_sampled_metrics(self, metrics_data: Dict[str, float]):
-        self.MinD_sampled = metrics_data["MinD"]
-        self.ANND_sampled = metrics_data["ANND"]
-        self.MPD_sampled = metrics_data["MPD"]
+        """Deprecated placeholder for backward compatibility."""
+        return None
 
     def get_ratio_metrics(self) -> Dict[str, float]:
-        """返回空字典，因为已移除所有比率计算"""
+        """Deprecated: ratio metrics removed."""
         return {}

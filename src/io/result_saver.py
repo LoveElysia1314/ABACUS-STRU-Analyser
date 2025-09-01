@@ -20,7 +20,8 @@ class ResultSaver:
     # Level 4+ 列顺序（进一步语义分组 & 类型聚类）
     # 分组顺序：
     # 1) 基础标识 & 条件 -> 2) 规模/维度 -> 3) 核心结构距离指标 -> 4) 多样性/覆盖/能量 ->
-    # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性 -> 7) 平均结构坐标
+    # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性
+    # 注意：原第7组 Mean_Structure_Coordinates 已拆分为独立 JSON 文件导出，列中移除（PR1）。
     SYSTEM_SUMMARY_HEADERS = [
         # 1) 基础标识
         "System", "Molecule_ID", "Configuration", "Temperature(K)",
@@ -34,8 +35,6 @@ class ResultSaver:
         "PCA_Num_Components_Retained", "PCA_Variance_Ratio", "PCA_Cumulative_Variance_Ratio", "PCA_Variance_Ratios",
         # 6) 分布 / 采样相似性指标
         "JS_Divergence", "EMD_Distance", "Mean_Centroid_Distance",
-        # 7) 平均结构坐标（高维 JSON 放在最后）
-        "Mean_Structure_Coordinates",
     ]
 
     SAMPLING_RECORDS_HEADERS = ["System", "System_Path", "Sampled_Frames"]  # Sampled_Frames格式: [1,5,10,15,20]
@@ -60,10 +59,9 @@ class ResultSaver:
             f"{metrics.ANND:.6f}",
             f"{metrics.MPD:.6f}",
         ])
-
         import json
         pca_variance_ratios_str = json.dumps(metrics.pca_explained_variance_ratio, ensure_ascii=False)
-        mean_structure_str = json.dumps(metrics.mean_structure.tolist(), ensure_ascii=False) if metrics.mean_structure is not None else ""
+        # Mean structure 不再写入 CSV，改为独立 JSON 文件导出（见 export_mean_structure）。
 
         # 4) 多样性/覆盖/能量范围
         row.extend([
@@ -87,10 +85,67 @@ class ResultSaver:
             "" if metrics.mean_centroid_distance is None else f"{metrics.mean_centroid_distance:.6f}",
         ])
 
-        # 7) 平均构象坐标
-        row.append(mean_structure_str)
-
         return row
+
+    @staticmethod
+    def export_mean_structure(output_dir: str, metrics: TrajectoryMetrics) -> None:
+        """导出单体系平均结构到独立 JSON 文件。
+
+        输出路径: <run_dir>/mean_structures/mean_structure_<system>.json
+        内容包含: 版本号, 导出时间, 系统基础信息, frame 统计, 维度, 均值结构 shape, 实际坐标数据。
+        若均值结构为空/None 则跳过。
+        """
+        logger = logging.getLogger(__name__)
+        try:
+            if metrics.mean_structure is None or getattr(metrics.mean_structure, 'size', 0) == 0:
+                return
+            import json, datetime
+            mean_dir = os.path.join(output_dir, 'mean_structures')
+            FileUtils.ensure_dir(mean_dir)
+            filepath = os.path.join(mean_dir, f"mean_structure_{metrics.system_name}.json")
+            data = {
+                "version": "1.0",  # PR1 初始版本
+                "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "system": metrics.system_name,
+                "molecule_id": metrics.mol_id,
+                "configuration": metrics.conf,
+                "temperature_K": metrics.temperature,
+                "num_frames": metrics.num_frames,
+                "dimension": metrics.dimension,
+                "mean_structure_shape": list(metrics.mean_structure.shape),
+                "mean_structure": metrics.mean_structure.tolist(),
+                # 新增RMSD缓存支持（续算复用）
+                "rmsd_mean": metrics.rmsd_mean,
+                "rmsd_per_frame": metrics.rmsd_per_frame,
+            }
+            # 原子级别字段扩展预留
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            # 维护索引文件（追加/更新）
+            try:
+                index_path = os.path.join(mean_dir, 'index.json')
+                index = {}
+                if os.path.exists(index_path):
+                    try:
+                        with open(index_path, 'r', encoding='utf-8') as idx_f:
+                            import json as _json
+                            index = _json.load(idx_f) or {}
+                    except Exception:
+                        index = {}
+                index[metrics.system_name] = {
+                    "file": os.path.basename(filepath),
+                    "num_frames": metrics.num_frames,
+                    "dimension": metrics.dimension,
+                    "shape": list(metrics.mean_structure.shape),
+                    "updated_at": data["exported_at"],
+                }
+                with open(index_path, 'w', encoding='utf-8') as idx_f:
+                    json.dump(index, idx_f, ensure_ascii=False, indent=2)
+            except Exception as ie:
+                logger.warning(f"更新均值结构索引失败: {ie}")
+        except Exception as e:
+            logger.warning(f"导出均值结构失败: {metrics.system_name}: {e}")
 
     @staticmethod
     def save_results(output_dir: str, analysis_results: List[Tuple], incremental: bool = False) -> None:
@@ -109,9 +164,14 @@ class ResultSaver:
                 # 保存系统汇总
                 if incremental:
                     ResultSaver.save_system_summary_incremental(output_dir, all_metrics)
+                    # 续算也强制覆盖均值结构（保持与最新指标一致）
+                    for m in all_metrics:
+                        ResultSaver.export_mean_structure(output_dir, m)
                 else:
-                    # 重新实现完整保存逻辑
+                    # 完整保存逻辑 + 导出均值结构 JSON
                     ResultSaver._save_system_summary_complete(output_dir, all_metrics)
+                    for m in all_metrics:
+                        ResultSaver.export_mean_structure(output_dir, m)
 
                 # 保存单体系详细结果
                 for metrics, result in zip(all_metrics, analysis_results):
