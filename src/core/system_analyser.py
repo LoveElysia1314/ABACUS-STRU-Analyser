@@ -24,6 +24,7 @@ from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics
 from .sampler import PowerMeanSampler
 from ..utils.data_utils import ErrorHandler
+from ..utils.metrics_utils import MetricsToolkit  # Level 4 adapters
 
 
 class RMSDCalculator:  # 保留兼容入口，内部委托 structural_metrics
@@ -231,6 +232,15 @@ class SystemAnalyser:
 
         # 在综合向量空间中计算指标
         original_metrics = MetricCalculator.compute_all_metrics(comprehensive_matrix)
+        # Level 4: 可选记录多样性与覆盖（暂不改变现有数据结构）
+        try:
+            diversity_info = MetricsToolkit.compute_diversity_metrics(comprehensive_matrix)
+            logger = logging.getLogger(__name__)
+            logger.debug(
+                f"[Level4] DiversityScore={diversity_info.diversity_score:.4f} Coverage={diversity_info.coverage_ratio:.4f}"
+            )
+        except Exception:
+            pass
         metrics.set_original_metrics(original_metrics)
 
         # 提取PCA分量用于保存（保持原有逻辑）

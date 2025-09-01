@@ -16,7 +16,7 @@ Planned Phase 2:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Sequence
+from typing import Dict, Sequence, List, Any
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
 from scipy.stats import entropy, wasserstein_distance
@@ -182,6 +182,39 @@ class MetricsToolkit:
             float(np.min(valid)),
             float(np.max(valid)),
         )
+
+    # ---- Adapters (Level 4) ----
+    @staticmethod
+    def adapt_frame_metrics(vectors_per_frame: List[np.ndarray]) -> List[BasicDistanceMetrics]:
+        """Compute basic metrics for each frame's internal coordinate vectors.
+
+        vectors_per_frame: list of (n_points, dim) arrays or flattened vector sets.
+        Returns list with NaN metrics where insufficient data.
+        """
+        results: List[BasicDistanceMetrics] = []
+        for vectors in vectors_per_frame:
+            try:
+                results.append(MetricsToolkit.compute_basic_distance_metrics(vectors))
+            except Exception:
+                results.append(BasicDistanceMetrics(np.nan, np.nan, np.nan))
+        return results
+
+    @staticmethod
+    def adapt_distribution_metrics(vectors: np.ndarray) -> Dict[str, Any]:
+        """Aggregate distribution-level metrics (basic + diversity)."""
+        basic = MetricsToolkit.compute_basic_distance_metrics(vectors)
+        diversity = MetricsToolkit.compute_diversity_metrics(vectors)
+        return {
+            "MinD": basic.MinD,
+            "ANND": basic.ANND,
+            "MPD": basic.MPD,
+            "diversity_score": diversity.diversity_score,
+            "coverage_ratio": diversity.coverage_ratio,
+            "pca_variance_ratio": diversity.pca_variance_ratio,
+            "energy_range": diversity.energy_range,
+            "num_frames": int(vectors.shape[0]) if hasattr(vectors, 'shape') else 0,
+            "dimension": int(vectors.shape[1]) if hasattr(vectors, 'shape') and vectors.ndim == 2 else 0,
+        }
 
 
 # Convenience re-exports for legacy style imports if needed

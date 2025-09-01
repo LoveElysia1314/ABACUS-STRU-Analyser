@@ -140,12 +140,18 @@ class DataValidator:
 3. ✅ RMSDCalculator 委托到统一模块（保留兼容层）
 4. ⏭️ 适配层（FrameMetrics / DistributionMetrics -> MetricsToolkit 数据类）转移到 Level 4
 
-### 第四阶段：代码质量提升 (持续)
+### 第四阶段：指标适配与采样质量扩展（当前进行）
+1. 🚧 数据结构适配层：新增 `MetricsToolkit.adapt_frame_metrics / adapt_distribution_metrics`
+2. 🚧 在 `system_analyser` 中植入多样性计算调试钩子（不破坏现有输出）
+3. ⏳ 下一步：统一 `FrameMetrics / DistributionMetrics / TrajectoryMetrics` 字段映射（计划增量替换保存层）
+4. ⏳ 采样集 vs 全集分布相似性自动报告（JS / EMD 指标）
+
+### 第五阶段：代码质量提升 (持续)
 1. 🔄 数据验证逻辑统一
 2. 🔄 常量提取和类型注解
 3. 🔄 性能优化
 
-### 第五阶段：文档和测试 (计划)
+### 第六阶段：文档和测试 (计划)
 1. 🔄 更新文档（新增结构指标使用示例）
 2. 🔄 完善测试覆盖（添加结构指标与采样质量对比测试）
 3. 🔄 代码审查
