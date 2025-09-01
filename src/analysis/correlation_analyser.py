@@ -99,11 +99,22 @@ class CorrelationAnalyser:
     # 补充：统一列表/数组到纯 Python list 的安全转换，避免 AttributeError
     def _to_python_list(self, obj):  # 轻量工具，保持与日志调用兼容
         try:
-            if isinstance(obj, (list, tuple)):
-                return list(obj)
+            import numpy as np  # 局部导入，避免全局依赖
+
+            def _convert(x):
+                # 将 numpy 标量、安全类型转为内置类型，保持稳定日志输出
+                if isinstance(x, np.generic):
+                    return x.item()
+                return x
+
+            if isinstance(obj, (list, tuple, set)):
+                return [_convert(x) for x in obj]
             if hasattr(obj, 'tolist'):
-                return obj.tolist()
-            return [obj]
+                v = obj.tolist()
+                if isinstance(v, list):
+                    return [_convert(x) for x in v]
+                return [_convert(v)]
+            return [_convert(obj)]
         except Exception:
             return [str(obj)]
 

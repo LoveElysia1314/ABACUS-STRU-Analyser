@@ -36,7 +36,7 @@ class ResultSaver:
         "PCA_Cumulative_Variance_Ratio",
         "PCA_Num_Components_Retained",
         "PCA_Variance_Ratios",  # 各主成分方差贡献率（JSON格式）
-        "Mean_Structure_Coordinates",  # 平均构象坐标（JSON格式）
+    "Mean_Structure_Coordinates",  # 平均构象坐标（JSON格式）
     "Diversity_Score",
     "Coverage_Ratio",
     "Energy_Range",
