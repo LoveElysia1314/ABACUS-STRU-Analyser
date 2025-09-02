@@ -6,10 +6,10 @@
 - **提升聚合度**：减少冗余和高耦合，规范项目架构
 
 ## 📊 当前进度
-- ✅ **已完成阶段**：阶段0、阶段1、阶段2、阶段3 (共完成4个阶段)
+- ✅ **已完成阶段**：阶段0、阶段1、阶段2、阶段3、阶段4 (共完成5个阶段)
 - 🔄 **进行中阶段**：无
-- ⏳ **待完成阶段**：阶段4、阶段5 (共2个阶段)
-- 📈 **总体进度**：66.7% (4/6阶段完成)
+- ⏳ **待完成阶段**：阶段5 (共1个阶段)
+- 📈 **总体进度**：83.3% (5/6阶段完成)
 
 ---
 
@@ -39,13 +39,10 @@
 
 ## 🔄 待完成阶段详情
 
-### 阶段4：IO相关合并 (⏳ 待开始)
-**目标**：将IO导出功能合并到result_saver.py
-- **合并内容**：
-  - deepmd_exporter.py → result_saver.py
-  - sampled_frames_to_deepmd.py → result_saver.py
-- **涉及文件**：更新相关import路径
-- **预期结果**：result_saver.py行数显著增加，文件数量减少到16个
+### 阶段4：IO相关合并 (✅ 已完成)
+- **合并内容**：deepmd_exporter.py + sampled_frames_to_deepmd.py → result_saver.py
+- **涉及文件**：更新main_abacus_analyser.py的import，删除deepmd_exporter.py和sampled_frames_to_deepmd.py
+- **结果**：result_saver.py从498行增加到808行，文件数量从18个减少到16个
 
 ### 阶段5：通用工具合并 (⏳ 待开始)
 **目标**：将工具类合并到common.py
@@ -80,29 +77,30 @@ src/
 └── io/
     ├── __init__.py
     ├── path_manager.py    (731行 - 可能需要拆分)
-    ├── result_saver.py    # 合并IO导出 (预期600+行)
+    ├── result_saver.py    # 合并IO导出 (808行)
     └── stru_parser.py     (280行)
 ```
 
 ## 🎯 下一步建议
 
-**立即开始阶段4**：IO相关合并
-- 理由：IO功能相对独立，合并复杂度适中
-- 预期用时：45-60分钟
+**立即开始阶段5**：通用工具合并
+- 理由：这是最后一个合并阶段，完成后将达成重构目标
+- 预期用时：60-90分钟
 - 风险等级：中
 
-**阶段4完成后建议**：
+**阶段5完成后建议**：
 - 评估correlation_analyser.py(887行)和path_manager.py(731行)是否需要拆分
-- 继续阶段5的合并工作
+- 进行最终的功能测试和代码审查
+- 更新项目文档和README
 
 ## 📝 继续工作的检查点
 
 当在新话题中继续时，请检查：
 1. 当前git状态是否干净
-2. io目录中是否还有deepmd_exporter.py、sampled_frames_to_deepmd.py
-3. utils目录中是否还有data_utils.py、file_utils.py
+2. utils目录中是否还有data_utils.py、file_utils.py
+3. io目录中是否还有deepmd_exporter.py、sampled_frames_to_deepmd.py
 4. 所有现有功能是否正常工作
 
 ---
 
-**🎉 当前状态**：已完成66.7%的重构工作，项目架构更加清晰，冗余代码显著减少。继续按计划执行可达成最终目标！
+**🎉 当前状态**：已完成83.3%的重构工作，项目架构更加清晰，冗余代码显著减少。只剩最后一个合并阶段即可达成最终目标！

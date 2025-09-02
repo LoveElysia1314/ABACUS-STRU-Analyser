@@ -435,11 +435,11 @@ class MainApp:
                         # 即时 per-system deepmd 导出
                         if system_path:
                             try:
-                                from src.io.deepmd_exporter import export_sampled_frames_per_system
+                                from src.io.result_saver import ResultSaver
                                 metrics = result[0]
                                 frames = result[1]
                                 out_root = os.path.join(self.current_output_dir, 'deepmd_npy_per_system')
-                                export_sampled_frames_per_system(
+                                ResultSaver.export_sampled_frames_per_system(
                                     frames=frames,
                                     sampled_frame_ids=getattr(metrics, 'sampled_frames', []) or [],
                                     system_path=system_path,
@@ -485,11 +485,11 @@ class MainApp:
                     self.logger.info(f"分析完成 ({i+1}/{len(system_paths)}): {result[0].system_name} [{mode}]")
                     # 即时 per-system deepmd 导出
                     try:
-                        from src.io.deepmd_exporter import export_sampled_frames_per_system
+                        from src.io.result_saver import ResultSaver
                         metrics = result[0]
                         frames = result[1]
                         out_root = os.path.join(self.current_output_dir, 'deepmd_npy_per_system')
-                        export_sampled_frames_per_system(
+                        ResultSaver.export_sampled_frames_per_system(
                             frames=frames,
                             sampled_frame_ids=getattr(metrics, 'sampled_frames', []) or [],
                             system_path=system_path,

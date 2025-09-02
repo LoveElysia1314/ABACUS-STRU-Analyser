@@ -3,7 +3,7 @@
 import csv
 import logging
 import os
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Sequence
 import datetime
 
 import numpy as np
@@ -495,3 +495,314 @@ class ResultSaver:
                 additional_info={"输出目录": output_dir}
             )
             raise
+
+
+# ---- DeepMD Export Functionality (merged from deepmd_exporter.py) ----
+
+ALL_TYPE_MAP = [
+    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
+    "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
+    "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
+]
+
+@staticmethod
+def _build_frame_id_index(frames: Sequence) -> Dict[int, int]:
+    """Build mapping from frame_id to frame index"""
+    mapping: Dict[int, int] = {}
+    for idx, f in enumerate(frames):
+        fid = getattr(f, 'frame_id', None)
+        if fid is not None and fid not in mapping:
+            mapping[fid] = idx
+    return mapping
+
+@staticmethod
+def export_sampled_frames_per_system(
+    frames: Sequence,
+    sampled_frame_ids: List[int],
+    system_path: str,
+    output_root: str,
+    system_name: str,
+    logger,
+    force: bool = False,
+) -> str | None:
+    """
+    Export sampled frames for a single system to DeepMD format.
+
+    Args:
+        frames: Sequence of frame objects
+        sampled_frame_ids: List of sampled frame IDs
+        system_path: Path to the ABACUS system directory
+        output_root: Root output directory
+        system_name: Name of the system
+        logger: Logger instance
+        force: Whether to force re-export
+
+    Returns:
+        Path to the exported directory or None if failed
+    """
+    if not sampled_frame_ids:
+        logger.debug(f"[deepmd-export] {system_name} 无采样帧，跳过导出")
+        return None
+
+    target_dir = os.path.join(output_root, system_name)
+    marker_file = os.path.join(target_dir, 'export.done')
+
+    if os.path.isdir(target_dir) and os.path.exists(marker_file) and not force:
+        logger.debug(f"[deepmd-export] {system_name} 已存在且未强制覆盖，跳过")
+        return target_dir
+
+    try:
+        import dpdata  # type: ignore
+        id2idx = ResultSaver._build_frame_id_index(frames)
+        subset_indices = [id2idx[fid] for fid in sampled_frame_ids if fid in id2idx]
+
+        if not subset_indices:
+            logger.warning(f"[deepmd-export] {system_name} 采样帧索引映射为空，跳过")
+            return None
+
+        ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
+        n_total = len(ls)
+        valid_subset = [i for i in subset_indices if 0 <= i < n_total]
+
+        if not valid_subset:
+            logger.warning(f"[deepmd-export] {system_name} 有效帧子集为空，跳过")
+            return None
+
+        sub_ls = ls[valid_subset]
+        os.makedirs(target_dir, exist_ok=True)
+        sub_ls.to_deepmd_npy(target_dir)
+
+        with open(marker_file, 'w', encoding='utf-8') as f:
+            f.write(f"frames={len(valid_subset)}\n")
+
+        logger.info(f"[deepmd-export] 导出 {system_name} deepmd npy 成功，帧数={len(valid_subset)} -> {target_dir}")
+        return target_dir
+
+    except Exception as e:
+        logger.error(f"[deepmd-export] 导出 {system_name} 失败: {e}")
+        return None
+
+
+# ---- Batch DeepMD Export Functionality (merged from sampled_frames_to_deepmd.py) ----
+
+@staticmethod
+def _dir_non_empty(path: str) -> bool:
+    """Check if directory exists and is not empty"""
+    return os.path.isdir(path) and any(os.scandir(path))
+
+@staticmethod
+def get_md_parameters(system_path: str, logger):
+    """
+    Extract md_dumpfreq and total_steps from ABACUS output directory.
+
+    Expected directory structure: <system_path>/OUT.ABACUS/
+    1. Read INPUT for md_dumpfreq (default to 1 if not found)
+    2. Parse running_md.log for maximum step number
+    Returns (md_dumpfreq, total_steps)
+    """
+    out_dir = os.path.join(system_path, 'OUT.ABACUS')
+    input_file = os.path.join(system_path, 'INPUT')
+    log_file = os.path.join(out_dir, 'running_md.log')
+    md_dumpfreq = 1
+    total_steps = 0
+
+    try:
+        if os.path.exists(input_file):
+            with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    ls = line.strip()
+                    if not ls or ls.startswith('#'):
+                        continue
+                    if 'md_dumpfreq' in ls.split('#')[0]:
+                        parts = ls.split()
+                        for i, p in enumerate(parts):
+                            if p.lower() == 'md_dumpfreq' and i + 1 < len(parts):
+                                try:
+                                    md_dumpfreq = int(parts[i+1])
+                                except ValueError:
+                                    pass
+                                break
+                        break
+
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    ls = line.strip()
+                    if not ls or ls.startswith('#'):
+                        continue
+                    # Log may start with step
+                    first = ls.split()[0]
+                    if first.isdigit():
+                        step_val = int(first)
+                        if step_val > total_steps:
+                            total_steps = step_val
+    except Exception as e:
+        logger.warning(f"Failed to parse MD parameters: {e}")
+
+    return md_dumpfreq, total_steps
+
+@staticmethod
+def steps_to_frame_indices(sampled_steps, md_dumpfreq, n_frames, logger):
+    """Convert MD steps to frame indices"""
+    if md_dumpfreq <= 0:
+        md_dumpfreq = 1
+    result = []
+    for st in sampled_steps:
+        frame_idx = st // md_dumpfreq
+        if frame_idx >= n_frames:
+            logger.warning(f"Step {st} -> frame index {frame_idx} out of range (max {n_frames-1}), using last frame")
+            frame_idx = n_frames - 1
+        elif frame_idx < 0:
+            logger.warning(f"Step {st} -> negative frame index {frame_idx}, discarding")
+            continue
+        result.append(frame_idx)
+    return result
+
+@staticmethod
+def export_sampled_frames_to_deepmd(run_dir: str, output_dir: str, split_ratio: List[float] = None,
+                                   logger=None, force_reexport: bool = False, seed: int = 42) -> None:
+    """
+    Export sampled frames from analysis_targets.json to DeepMD format with optional splitting.
+
+    Args:
+        run_dir: Analysis results directory containing analysis_targets.json
+        output_dir: Output directory for DeepMD npy files
+        split_ratio: List of split ratios, e.g., [0.8, 0.2]
+        logger: Optional logger instance
+        force_reexport: Whether to force re-export (ignore existing files)
+        seed: Random seed for splitting
+    """
+    import json
+    import dpdata
+
+    if logger is None:
+        from ..utils.logmanager import create_standard_logger
+        logger = create_standard_logger(__name__, level=20)
+
+    # Skip if directory exists and not forcing
+    if ResultSaver._dir_non_empty(output_dir) and not force_reexport:
+        logger.info(f"Output directory exists and is not empty, skipping export: {output_dir}")
+        logger.info("To re-export, set force_reexport=True or clear the directory")
+        return
+
+    logger.info("Starting sampled frames export task")
+    targets_path = os.path.join(run_dir, 'analysis_targets.json')
+
+    if not os.path.exists(targets_path):
+        logger.error(f"Targets file not found: {targets_path}")
+        return
+
+    with open(targets_path, 'r', encoding='utf-8') as f:
+        targets = json.load(f)
+
+    ms = dpdata.MultiSystems()
+    total_sampled_frames = 0
+
+    for mol in targets['molecules'].values():
+        for sys_name, sys_info in mol['systems'].items():
+            system_path = sys_info['system_path']
+            sampled_frames = json.loads(sys_info['sampled_frames']) if isinstance(sys_info['sampled_frames'], str) else sys_info['sampled_frames']
+
+            if not os.path.exists(system_path):
+                logger.warning(f"System path not found: {system_path}")
+                continue
+
+            try:
+                logger.info(f"Processing {sys_name}, original sampled list length: {len(sampled_frames)}")
+                dd = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
+                n_frames = len(dd)
+
+                if n_frames == 0:
+                    logger.warning(f"{sys_name} has no available frames, skipping")
+                    continue
+
+                # Determine if sampled_frames looks like "steps" rather than "frame indices"
+                treat_as_steps = False
+                if sampled_frames:
+                    max_val = max(sampled_frames)
+                    min_val = min(sampled_frames)
+                    if max_val >= n_frames:  # Obviously exceeds frame count => treat as steps
+                        treat_as_steps = True
+
+                if treat_as_steps:
+                    md_dumpfreq, total_steps = ResultSaver.get_md_parameters(system_path, logger)
+                    logger.info(f"Detected sampled list as steps, converting using md_dumpfreq={md_dumpfreq} (max step {max_val}, parsed max actual step {total_steps})")
+                    sampled_frames_conv = ResultSaver.steps_to_frame_indices(sampled_frames, md_dumpfreq, n_frames, logger)
+                else:
+                    sampled_frames_conv = sampled_frames
+
+                # Possible 1-based -> 0-based correction (heuristic, only for non-step cases)
+                if (not treat_as_steps and sampled_frames_conv and min(sampled_frames_conv) >= 1
+                        and max(sampled_frames_conv) == n_frames and 0 not in sampled_frames_conv):
+                    logger.info(f"Detected possible 1-based frame indices, auto-correcting by -1 ({sys_name})")
+                    sampled_frames_conv = [i - 1 for i in sampled_frames_conv]
+
+                # Filter out-of-bounds indices
+                valid_indices = [i for i in sampled_frames_conv if 0 <= i < n_frames]
+                invalid_count = len(sampled_frames_conv) - len(valid_indices)
+
+                if invalid_count > 0:
+                    logger.warning(f"{sys_name} filtered out {invalid_count} out-of-bounds indices (valid frame range 0~{n_frames-1})")
+
+                if not valid_indices:
+                    logger.warning(f"{sys_name} has no valid sampled frames, skipping")
+                    continue
+
+                # Remove duplicates while preserving order
+                ordered_indices = list(dict.fromkeys(valid_indices))
+                sub_dd = dd[ordered_indices]
+                ms.append(sub_dd)
+                total_sampled_frames += len(ordered_indices)
+                logger.info(f"Successfully added {sys_name} frames: {len(ordered_indices)} (original list {len(sampled_frames)}, converted {len(sampled_frames_conv)})")
+
+            except Exception as e:
+                logger.error(f"Failed to read {system_path}: {e}")
+
+    logger.info(f"Total sampled frames: {total_sampled_frames}")
+    logger.info(f"MultiSystems info: {ms}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    ms.to_deepmd_npy(output_dir)
+    logger.info(f"Exported DeepMD npy to {output_dir}")
+
+    if split_ratio:
+        ResultSaver.split_and_save(ms, output_dir, split_ratio, logger, seed=seed)
+
+@staticmethod
+def split_and_save(ms, output_dir: str, split_ratio: List[float], logger, seed: int = 42) -> None:
+    """Split and save MultiSystems dataset"""
+    import dpdata
+    import numpy as np
+
+    total_frames = ms.get_nframes()
+    logger.info(f"Starting dataset split, total frames: {total_frames}")
+
+    indices = np.arange(total_frames)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+
+    split_points = np.cumsum([int(r * total_frames) for r in split_ratio[:-1]])
+    splits = np.split(indices, split_points)
+
+    for i, idx in enumerate(splits):
+        sub_ms = dpdata.MultiSystems()
+        frame_offset = 0
+
+        for sys in ms.systems:
+            sys_frames = len(sys)  # Use len() instead of get_nframes()
+            sys_indices = [j for j in idx if frame_offset <= j < frame_offset + sys_frames]
+
+            if sys_indices:
+                local_indices = [j - frame_offset for j in sys_indices]
+                # Correction: use indices instead of subset method
+                sub_sys = sys[local_indices]
+                sub_ms.append(sub_sys)
+
+            frame_offset += sys_frames
+
+        sub_dir = os.path.join(output_dir, f"split_{i}")
+        os.makedirs(sub_dir, exist_ok=True)
+        sub_ms.to_deepmd_npy(sub_dir)
+        logger.info(f"Saved split subset {sub_dir}, frames: {len(idx)}")

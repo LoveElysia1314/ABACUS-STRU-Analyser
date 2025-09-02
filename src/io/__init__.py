@@ -7,4 +7,4 @@ from .path_manager import PathManager
 from .result_saver import ResultSaver
 from .stru_parser import StrUParser
 
-__all__ = ['sampled_frames_to_deepmd', 'PathManager', 'ResultSaver', 'StrUParser']
+__all__ = ['PathManager', 'ResultSaver', 'StrUParser']
