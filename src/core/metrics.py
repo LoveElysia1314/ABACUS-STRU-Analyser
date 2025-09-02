@@ -262,7 +262,7 @@ class MetricsToolkit:
         full_vectors: np.ndarray,
         rmsd_values: Optional[Union[np.ndarray, List[float]]] = None
     ) -> Dict[str, Any]:
-        """Convenience wrapper for sampling comparison."""
+        """Adapt sampling metrics for comparison analysis."""
         try:
             basic = MetricsToolkit.compute_basic_distance_metrics(selected_vectors)
             diversity = MetricsToolkit.compute_diversity_metrics(selected_vectors)
@@ -278,36 +278,6 @@ class MetricsToolkit:
             }
         except Exception:
             return {}
-
-    # ---- Wrapper methods for legacy compatibility ----
-    @staticmethod
-    def wrap_diversity(vectors: np.ndarray) -> Dict[str, float]:
-        """Legacy wrapper for diversity metrics."""
-        m = MetricsToolkit.compute_diversity_metrics(vectors)
-        return {
-            'coverage_ratio': m.coverage_ratio,
-            'pca_variance_ratio': m.pca_variance_ratio,
-            'energy_range': m.energy_range,
-        }
-
-    @staticmethod
-    def wrap_rmsd(values: Sequence[float]) -> Dict[str, float]:
-        """Legacy wrapper for RMSD summary."""
-        s = MetricsToolkit.summarize_rmsd(values)
-        return {
-            'rmsd_mean': s.rmsd_mean,
-            'rmsd_std': s.rmsd_std,
-            'rmsd_min': s.rmsd_min,
-            'rmsd_max': s.rmsd_max,
-        }
-
-    @staticmethod
-    def wrap_similarity(sample_vectors: np.ndarray, full_vectors: np.ndarray) -> Dict[str, float]:
-        """Legacy wrapper for distribution similarity."""
-        m = MetricsToolkit.compute_distribution_similarity(sample_vectors, full_vectors)
-        return {
-            'js_divergence': m.js_divergence,
-        }
 
     @staticmethod
     def collect_metric_values(results: List[Dict[str, Any]], key: str) -> List[float]:
@@ -369,20 +339,6 @@ class MetricCalculator:
         }
 
 
-
-    @staticmethod
-    def _calculate_ANND(vector_matrix: np.ndarray) -> float:  # deprecated
-        """(Deprecated) 保留旧接口，内部委托统一工具。"""
-        basic = MetricsToolkit.compute_basic_distance_metrics(vector_matrix)
-        return 0.0 if np.isnan(basic.ANND) else float(basic.ANND)
-
-
-
-    @staticmethod
-    def estimate_mean_distance(vectors: np.ndarray) -> float:  # deprecated
-        """(Deprecated) 平均成对距离，委托统一工具 MPD。"""
-        basic = MetricsToolkit.compute_basic_distance_metrics(vectors)
-        return 0.0 if np.isnan(basic.MPD) else float(basic.MPD)
 
     @staticmethod
     def calculate_dRMSF(distance_vectors: np.ndarray) -> float:
@@ -467,9 +423,6 @@ class TrajectoryMetrics:
         self.MPD = metrics_data["MPD"]
 
     def set_sampled_metrics(self, metrics_data: Dict[str, float]):
-        """Deprecated placeholder for backward compatibility."""
-        return None
-
-    def get_ratio_metrics(self) -> Dict[str, float]:
-        """Deprecated: ratio metrics removed."""
-        return {}
+        """设置采样后的指标数据"""
+        self.ANND = metrics_data.get("ANND", 0.0)
+        self.MPD = metrics_data.get("MPD", 0.0)

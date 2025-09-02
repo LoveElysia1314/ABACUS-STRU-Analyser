@@ -115,6 +115,73 @@ class RMSDCalculator:
             rmsds = []
         return mean_struct, rmsds
 
+    @staticmethod
+    def calculate_group_rmsd(system_path: str, frame_indices: List[int], logger: Optional[logging.Logger] = None) -> np.ndarray:
+        """为指定帧索引列表计算基于本组mean structure的RMSD序列
+
+        Args:
+            system_path: 系统目录路径
+            frame_indices: 帧号列表（Frame_ID）
+            logger: 可选的日志记录器
+
+        Returns:
+            RMSD序列数组
+        """
+        try:
+            # 加载原子坐标数据
+            stru_dir = os.path.join(system_path, "OUT.ABACUS", "STRU")
+            if not os.path.exists(stru_dir):
+                if logger:
+                    logger.warning(f"STRU目录不存在: {stru_dir}")
+                return np.array([])
+
+            parser = StrUParser(exclude_hydrogen=True)
+            all_frames = parser.parse_trajectory(stru_dir)
+
+            if not all_frames:
+                if logger:
+                    logger.warning(f"未找到有效轨迹数据: {system_path}")
+                return np.array([])
+
+            # 按frame_id排序
+            all_frames.sort(key=lambda x: x.frame_id)
+
+            # 将帧号映射到数组索引（帧号 // 10）
+            array_indices = []
+            for frame_id in frame_indices:
+                idx = frame_id // 10
+                if idx < len(all_frames):
+                    array_indices.append(idx)
+                else:
+                    if logger:
+                        logger.warning(f"帧号 {frame_id} 对应的数组索引 {idx} 超出范围 (总帧数: {len(all_frames)})")
+
+            if len(array_indices) < 2:
+                if logger:
+                    logger.warning(f"有效帧数不足: {len(array_indices)}")
+                return np.array([])
+
+            # 提取指定帧的positions
+            selected_positions = [all_frames[idx].positions.copy() for idx in array_indices]
+
+            # 计算本组的mean structure
+            mean_structure, aligned_positions = RMSDCalculator.iterative_mean_structure(
+                selected_positions, max_iter=20, tol=1e-6
+            )
+
+            # 计算每帧到mean structure的RMSD
+            rmsds = []
+            for pos in aligned_positions:
+                rmsd = RMSDCalculator.calculate_rmsd(pos, mean_structure)
+                rmsds.append(rmsd)
+
+            return np.array(rmsds, dtype=float)
+
+        except Exception as e:
+            if logger:
+                logger.error(f"计算组RMSD时出错: {e}")
+            return np.array([])
+
 
 class PCAReducer:
     """PCA降维处理器类，支持按累计方差贡献率降维"""

@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 # 导入自定义模块
-from src.utils import DirectoryDiscovery
 from src.utils.logmanager import LoggerManager
 from src.io.path_manager import PathManager
 from src.core.system_analyser import SystemAnalyser, BatchAnalyser
@@ -217,9 +216,9 @@ class AnalysisOrchestrator:
             self.logger.info(f"搜索路径: {search_path}")
             try:
                 if self.config.include_project:
-                    mol_systems = DirectoryDiscovery.find_abacus_systems(search_path, include_project=True)
+                    mol_systems = FileUtils.find_abacus_systems(search_path, include_project=True)
                 else:
-                    mol_systems = DirectoryDiscovery.find_abacus_systems(search_path)
+                    mol_systems = FileUtils.find_abacus_systems(search_path)
                 
                 for mol_key, system_paths in mol_systems.items():
                     if mol_key in all_mol_systems:
@@ -340,7 +339,7 @@ class AnalysisOrchestrator:
             return []
 
         # 采样复用判定仅对待处理体系执行
-        reuse_map = path_manager.determine_sampling_reuse(target_names={t.system_name for t in pending_targets})
+        reuse_map = path_manager.determine_sampling_reuse()
         self.logger.info(
             f"采样复用：待处理 {len(pending_targets)} 个体系，可复用 {len(reuse_map)} 个采样帧 (全部: {len(all_targets)}, 已处理: {len(processed_systems)})"
         )

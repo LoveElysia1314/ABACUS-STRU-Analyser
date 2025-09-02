@@ -518,3 +518,54 @@ class FileUtils:
         # Go up one more level to project root
         project_root = os.path.dirname(src_dir)
         return project_root
+
+    @staticmethod
+    def find_abacus_systems(search_path: str, include_project: bool = False) -> dict:
+        """Find ABACUS systems in the given search path
+
+        Args:
+            search_path: Root directory to search for ABACUS systems
+            include_project: Whether to include the project directory itself
+
+        Returns:
+            Dictionary mapping molecule IDs to lists of system paths
+        """
+        import re
+
+        mol_systems = {}
+
+        # Skip project directory if not requested
+        if not include_project:
+            project_root = FileUtils.get_project_root()
+            if os.path.abspath(search_path) == os.path.abspath(project_root):
+                return mol_systems
+
+        # Pattern for ABACUS system directories
+        # Format: struct_mol_{molecule_id}_conf_{conf_id}_T{temperature}K
+        system_pattern = re.compile(r'struct_mol_(\d+)_conf_\d+_T\d+K$')
+
+        try:
+            # Walk through all directories
+            for root, dirs, files in os.walk(search_path):
+                # Check if current directory is an ABACUS system
+                dir_name = os.path.basename(root)
+                match = system_pattern.match(dir_name)
+
+                if match:
+                    molecule_id = match.group(1)
+                    system_path = root
+
+                    # Check if it contains STRU files (basic validation)
+                    stru_dir = os.path.join(system_path, "OUT.ABACUS", "STRU")
+                    if os.path.exists(stru_dir):
+                        stru_files = [f for f in os.listdir(stru_dir) if f.startswith("STRU_MD_")]
+                        if stru_files:  # Only include if there are STRU files
+                            if molecule_id not in mol_systems:
+                                mol_systems[molecule_id] = []
+                            mol_systems[molecule_id].append(system_path)
+
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Error searching for ABACUS systems in {search_path}: {e}")
+
+        return mol_systems
