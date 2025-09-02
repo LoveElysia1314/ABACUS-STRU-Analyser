@@ -14,6 +14,7 @@ import logging
 import multiprocessing as mp
 import glob
 import json
+from typing import List, Dict, Optional, Tuple, Any, Set
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -27,6 +28,7 @@ from src.io.result_saver import ResultSaver
 from src.utils.common import ErrorHandler
 from src.utils.common import FileUtils
 from src.utils.common import ErrorHandler as _Err
+from src.analysis.sampling_comparison.streaming_compare import StreamingSamplingComparisonManager
 
 # 采样效果评估（采样对比）
 try:
@@ -143,10 +145,14 @@ class AnalysisOrchestrator:
     
     def __init__(self, config: AnalysisConfig):
         self.config = config
-        self.logger = None
+        self.logger: Optional[logging.Logger] = None
         self.log_queue = None
         self.log_listener = None
-        self.current_output_dir = None
+        self.current_output_dir: Optional[str] = None
+        # 流式输出控制
+        self.streaming_enabled: bool = True
+        self._stream_flush_counter: int = 0
+        self._targets_flush_interval: int = 1  # 后续可参数化
         
     def setup_logging(self) -> None:
         """设置多进程安全日志系统"""
@@ -238,6 +244,14 @@ class AnalysisOrchestrator:
         path_manager = PathManager(self.config.output_dir)
         actual_output_dir = path_manager.set_output_dir_for_params(current_analysis_params)
         self.current_output_dir = actual_output_dir
+        # 初始化流式采样比较管理器（仅完整模式 + 采样评估启用）
+        if (self.streaming_enabled and self.config.mode == AnalysisMode.FULL_ANALYSIS \
+            and self.config.enable_sampling_eval):
+            try:
+                self.sampling_stream_manager = StreamingSamplingComparisonManager(actual_output_dir, logger=self.logger)
+            except Exception as e:
+                self.logger.warning(f"初始化流式采样比较失败，回退离线模式: {e}")
+                self.sampling_stream_manager = None
         
         self.logger.info(f"使用参数专用目录: {actual_output_dir}")
         return path_manager, actual_output_dir
@@ -307,30 +321,39 @@ class AnalysisOrchestrator:
             pca_variance_ratio=self.config.pca_variance_ratio
         )
         
-        # 采样复用判定
-        reuse_map = path_manager.determine_sampling_reuse()
-        self.logger.info(f"采样复用判定完成：可复用 {len(reuse_map)} / {len(path_manager.targets)} 个系统的采样帧")
+        # 获取全部分析目标
+        all_targets = path_manager.get_all_targets()
+
+        # 已处理体系过滤（先过滤再做复用统计，使日志一致）
+        processed_systems: Set[str] = set()
+        if not self.config.force_recompute:
+            progress_info = ResultSaver.load_progress(self.current_output_dir)
+            processed_systems = set(progress_info.get('processed_systems', []))
+
+        pending_targets = [t for t in all_targets if t.system_name not in processed_systems]
+
+        if not pending_targets:
+            # 全部已处理 / 无目标：精简输出
+            self.logger.info(
+                f"所有 {len(all_targets)} 个体系均已处理，无需重复分析 (force_recompute=False)。"
+            )
+            return []
+
+        # 采样复用判定仅对待处理体系执行
+        reuse_map = path_manager.determine_sampling_reuse(target_names={t.system_name for t in pending_targets})
+        self.logger.info(
+            f"采样复用：待处理 {len(pending_targets)} 个体系，可复用 {len(reuse_map)} 个采样帧 (全部: {len(all_targets)}, 已处理: {len(processed_systems)})"
+        )
 
         # Dry-run检查
         if self.config.dry_run_reuse:
             self._output_reuse_plan(reuse_map, path_manager)
             return []
 
-        # 获取分析目标
-        analysis_targets = path_manager.get_all_targets()
+        analysis_targets = pending_targets
+        system_paths = [t.system_path for t in analysis_targets]
         
-        # 过滤已处理的系统（仅在非强制模式下）
-        if not self.config.force_recompute:
-            progress_info = ResultSaver.load_progress(self.current_output_dir)
-            processed_systems = set(progress_info.get('processed_systems', []))
-            
-            if processed_systems:
-                unprocessed_targets = [t for t in analysis_targets if t.system_name not in processed_systems]
-                self.logger.info(f"检测到 {len(processed_systems)} 个已处理系统，跳过这些系统")
-                analysis_targets = unprocessed_targets
-
-        system_paths = [target.system_path for target in analysis_targets]
-        
+        # 经过上方 pending 判定，这里 system_paths 一定非空；保留保护
         if not system_paths:
             self.logger.info("没有需要处理的系统")
             return []
@@ -389,6 +412,68 @@ class AnalysisOrchestrator:
                         # 即时导出（如果有采样结果）
                         if system_path and len(result) >= 2:
                             self._export_sampled_frames(result, system_path, system_name)
+
+                        # 流式保存单体系结果
+                        if self.streaming_enabled:
+                            try:
+                                ResultSaver.save_single_system(
+                                    output_dir=self.current_output_dir,
+                                    result=result,
+                                    sampling_only=sampling_only,
+                                    flush_targets_hook=(lambda: path_manager.save_analysis_targets({
+                                        'sample_ratio': self.config.sample_ratio,
+                                        'power_p': self.config.power_p,
+                                        'pca_variance_ratio': self.config.pca_variance_ratio
+                                    })) if (self._targets_flush_interval == 1 or ((len(analysis_results) % self._targets_flush_interval) == 0)) else None
+                                )
+                            except Exception as se:
+                                self.logger.warning(f"流式保存体系结果失败(忽略): {se}")
+                        # 流式采样比较
+                        if (not sampling_only) and getattr(self, 'sampling_stream_manager', None) and len(result) >= 7:
+                            try:
+                                metrics = result[0]
+                                frames = result[1]
+                                pca_components_data = result[4]
+                                # 构建 vectors: energy_standardized + PCs
+                                # 建立 frame_id -> energy_standardized
+                                id2energy = {f.frame_id: getattr(f, 'energy_standardized', None) for f in frames}
+                                vectors_list = []
+                                frame_ids = []
+                                # 获取最大 PC 数
+                                max_pc = 0
+                                for item in pca_components_data:
+                                    for k in item.keys():
+                                        if k.startswith('PC'):
+                                            idx_pc = int(k[2:])
+                                            if idx_pc > max_pc:
+                                                max_pc = idx_pc
+                                for item in pca_components_data:
+                                    fid = item.get('frame')
+                                    if fid is None:
+                                        continue
+                                    energy_std = id2energy.get(fid)
+                                    if energy_std is None:
+                                        continue
+                                    vec = [energy_std]
+                                    for i_pc in range(1, max_pc+1):
+                                        vec.append(item.get(f'PC{i_pc}', 0.0))
+                                    vectors_list.append(vec)
+                                    frame_ids.append(fid)
+                                import numpy as _np
+                                if vectors_list:
+                                    vectors_arr = _np.array(vectors_list, dtype=float)
+                                    frame_ids_arr = _np.array(frame_ids, dtype=int)
+                                    sampled_set = set(getattr(metrics, 'sampled_frames', []))
+                                    sampled_mask = _np.array([fid in sampled_set for fid in frame_ids_arr])
+                                    self.sampling_stream_manager.update_per_system(
+                                        system_name=metrics.system_name,
+                                        system_path=system_path,
+                                        vectors=vectors_arr,
+                                        sampled_mask=sampled_mask,
+                                        frame_ids=frame_ids_arr
+                                    )
+                            except Exception as ce:
+                                self.logger.warning(f"流式采样比较更新失败(忽略): {ce}")
                     else:
                         self.logger.warning("并行分析返回空结果，标记为失败")
             except Exception as e:
@@ -432,6 +517,65 @@ class AnalysisOrchestrator:
                     
                     # 即时导出
                     self._export_sampled_frames(result, system_path, system_name)
+
+                    # 流式保存
+                    if self.streaming_enabled:
+                        try:
+                            ResultSaver.save_single_system(
+                                output_dir=self.current_output_dir,
+                                result=result,
+                                sampling_only=sampling_only,
+                                flush_targets_hook=(lambda: path_manager.save_analysis_targets({
+                                    'sample_ratio': self.config.sample_ratio,
+                                    'power_p': self.config.power_p,
+                                    'pca_variance_ratio': self.config.pca_variance_ratio
+                                })) if (self._targets_flush_interval == 1 or ((len(analysis_results) % self._targets_flush_interval) == 0)) else None
+                            )
+                        except Exception as se:
+                            self.logger.warning(f"流式保存体系结果失败(忽略): {se}")
+                    # 流式采样比较
+                    if (not sampling_only) and getattr(self, 'sampling_stream_manager', None) and len(result) >= 7:
+                        try:
+                            metrics_obj = result[0]
+                            frames = result[1]
+                            pca_components_data = result[4]
+                            id2energy = {f.frame_id: getattr(f, 'energy_standardized', None) for f in frames}
+                            vectors_list = []
+                            frame_ids = []
+                            max_pc = 0
+                            for item in pca_components_data:
+                                for k in item.keys():
+                                    if k.startswith('PC'):
+                                        idx_pc = int(k[2:])
+                                        if idx_pc > max_pc:
+                                            max_pc = idx_pc
+                            for item in pca_components_data:
+                                fid = item.get('frame')
+                                if fid is None:
+                                    continue
+                                energy_std = id2energy.get(fid)
+                                if energy_std is None:
+                                    continue
+                                vec = [energy_std]
+                                for i_pc in range(1, max_pc+1):
+                                    vec.append(item.get(f'PC{i_pc}', 0.0))
+                                vectors_list.append(vec)
+                                frame_ids.append(fid)
+                            import numpy as _np
+                            if vectors_list:
+                                vectors_arr = _np.array(vectors_list, dtype=float)
+                                frame_ids_arr = _np.array(frame_ids, dtype=int)
+                                sampled_set = set(getattr(metrics_obj, 'sampled_frames', []))
+                                sampled_mask = _np.array([fid in sampled_set for fid in frame_ids_arr])
+                                self.sampling_stream_manager.update_per_system(
+                                    system_name=metrics_obj.system_name,
+                                    system_path=system_path,
+                                    vectors=vectors_arr,
+                                    sampled_mask=sampled_mask,
+                                    frame_ids=frame_ids_arr
+                                )
+                        except Exception as ce:
+                            self.logger.warning(f"流式采样比较更新失败(忽略): {ce}")
                 else:
                     self.logger.warning(f"分析失败 ({i+1}/{len(system_paths)}): {system_path}")
             except Exception as e:
@@ -467,6 +611,26 @@ class AnalysisOrchestrator:
         """保存分析结果"""
         if not analysis_results:
             self.logger.warning("没有分析结果需要保存")
+            return
+
+        # 流式模式下，集中保存退化为兜底（检查是否遗漏行）
+        if self.streaming_enabled:
+            self.logger.info("流式模式：跳过集中写入，执行兜底检查")
+            try:
+                from collections import defaultdict
+                # 读取 progress 已处理体系
+                progress = ResultSaver.load_progress(self.current_output_dir)
+                done = set(progress.get('processed_systems', []))
+                missing = [r for r in analysis_results if getattr(r[0], 'system_name', None) not in done]
+                if missing:
+                    self.logger.info(f"检测到 {len(missing)} 个遗漏体系，补写...")
+                    for r in missing:
+                        try:
+                            ResultSaver.save_single_system(self.current_output_dir, r, sampling_only=(self.config.mode==AnalysisMode.SAMPLING_ONLY))
+                        except Exception:
+                            pass
+            except Exception as e:
+                self.logger.warning(f"兜底检查失败(忽略): {e}")
             return
             
         # 仅采样模式的特殊处理
@@ -526,7 +690,14 @@ class AnalysisOrchestrator:
         
         # 采样效果评估
         if self.config.enable_sampling_eval:
-            self._run_sampling_evaluation()
+            # 若存在流式管理器则直接 finalize，跳过离线全量遍历
+            if getattr(self, 'sampling_stream_manager', None):
+                try:
+                    self.sampling_stream_manager.finalize()
+                except Exception as fe:
+                    self.logger.warning(f"流式采样汇总 finalize 失败: {fe}")
+            else:
+                self._run_sampling_evaluation()
     
     def _run_correlation_analysis(self) -> None:
         """运行相关性分析"""
@@ -718,6 +889,13 @@ class MainApp:
             path_manager.save_analysis_targets(current_analysis_params)
         except Exception as e:
             self.orchestrator.logger.error(f"保存分析目标失败: {str(e)}")
+
+        # 流式模式：最终排序 system_metrics_summary.csv（不影响分析正确性）
+        if self.orchestrator.streaming_enabled and self.orchestrator.config.mode == AnalysisMode.FULL_ANALYSIS:
+            try:
+                ResultSaver.reorder_system_summary(output_dir)
+            except Exception as re:
+                self.orchestrator.logger.warning(f"system_metrics_summary 排序失败(忽略): {re}")
         
         # 输出最终统计
         elapsed = time.time() - start_time

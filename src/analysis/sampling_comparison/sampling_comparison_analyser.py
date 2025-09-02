@@ -110,7 +110,7 @@ class SamplingComparisonAnalyser:
             )
 
             # 随机采样比较
-            rand_results = self._run_random_sampling_comparison(vectors, selected, df, system_path, sampled_indices, k, n)
+            rand_metrics = self._run_random_sampling_comparison(vectors, df, system_path, k, n)
 
             # 均匀采样比较
             uniform_metrics = self._run_uniform_sampling_comparison(vectors, df, system_path, k, n)
@@ -118,39 +118,37 @@ class SamplingComparisonAnalyser:
             # 构建结果行
             return self._build_result_row(
                 system, sample_ratio, n, k,
-                sampled_metrics, rand_results, uniform_metrics
+                sampled_metrics, rand_metrics, uniform_metrics
             )
 
         except Exception as e:
             self.logger.error(f"分析系统 {file_path} 时出错: {e}")
             return None
 
-    def _run_random_sampling_comparison(self, vectors, selected_mask, df, system_path, sampled_indices, k, n):
-        """运行随机采样比较"""
-        rand_results = []
+    def _run_random_sampling_comparison(self, vectors, df, system_path, k, n):
+        """运行随机采样比较（单次，固定 seed=42），返回单个指标字典
+
+        参数精简：移除未使用的 selected_mask / sampled_indices。
+        """
         frame_indices = df['Frame_ID'].values
+        rng = np.random.default_rng(42)
+        idx = rng.choice(n, k, replace=False)
+        sel_vectors = vectors[idx]
+        sel_frame_indices = frame_indices[idx]
 
-        for _ in range(10):
-            idx = np.random.choice(n, k, replace=False)
-            sel_vectors = vectors[idx]
-            sel_frame_indices = frame_indices[idx]
-
-            # 重新计算随机组的RMSD
-            rand_rmsd = []
-            if system_path:
-                rand_rmsd = self._calculate_group_rmsd(system_path, sel_frame_indices.tolist())
-                if len(rand_rmsd) == 0:
-                    self.logger.warning(f"无法计算随机组RMSD，使用原有RMSD数据")
-                    rand_rmsd = pd.to_numeric(df.iloc[idx]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
-            else:
+        # 重新计算随机组的RMSD
+        if system_path:
+            rand_rmsd = self._calculate_group_rmsd(system_path, sel_frame_indices.tolist())
+            if len(rand_rmsd) == 0:
+                self.logger.warning("无法计算随机组RMSD，使用原有RMSD数据")
                 rand_rmsd = pd.to_numeric(df.iloc[idx]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
+        else:
+            rand_rmsd = pd.to_numeric(df.iloc[idx]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
 
-            sel_metrics = MetricsToolkit.adapt_sampling_metrics(
-                sel_vectors, vectors,
-                rand_rmsd if len(rand_rmsd) > 0 else []
-            )
-            rand_results.append(sel_metrics)
-        return rand_results
+        return MetricsToolkit.adapt_sampling_metrics(
+            sel_vectors, vectors,
+            rand_rmsd if len(rand_rmsd) > 0 else []
+        )
 
     def _run_uniform_sampling_comparison(self, vectors, df, system_path, k, n):
         """运行均匀采样比较"""
@@ -177,15 +175,9 @@ class SamplingComparisonAnalyser:
             uniform_rmsd if len(uniform_rmsd) > 0 else []
         )
 
-    def _build_result_row(self, system, sample_ratio, n, k, sampled_metrics, rand_results, uniform_metrics):
+    def _build_result_row(self, system, sample_ratio, n, k, sampled_metrics, rand_metrics, uniform_metrics):
         """构建结果行数据"""
-        # 收集随机采样统计
-        rand_ANND = MetricsToolkit.collect_metric_values(rand_results, 'ANND')
-        rand_MPD = MetricsToolkit.collect_metric_values(rand_results, 'MPD')
-        rand_Cov = MetricsToolkit.collect_metric_values(rand_results, 'Coverage_Ratio')
-        rand_JS = MetricsToolkit.collect_metric_values(rand_results, 'JS_Divergence')
-        rand_RMSD = MetricsToolkit.collect_metric_values(rand_results, 'RMSD_Mean')
-        rand_EnergyRange = MetricsToolkit.collect_metric_values(rand_results, 'Energy_Range')
+        # 随机采样单次结果直接使用 rand_metrics
 
         return {
             # 基本信息
@@ -203,14 +195,12 @@ class SamplingComparisonAnalyser:
             'RMSD_Mean_sampled': sampled_metrics.get('RMSD_Mean'),
 
             # 随机采样统计
-            'ANND_random_mean': np.mean(rand_ANND) if rand_ANND else np.nan,
-            'ANND_random_std': np.std(rand_ANND, ddof=1) if len(rand_ANND) >= 2 else np.nan,
-            'MPD_random_mean': np.mean(rand_MPD) if rand_MPD else np.nan,
-            'MPD_random_std': np.std(rand_MPD, ddof=1) if len(rand_MPD) >= 2 else np.nan,
-            'Coverage_random_mean': np.mean(rand_Cov) if rand_Cov else np.nan,
-            'Energy_Range_random_mean': np.mean(rand_EnergyRange) if rand_EnergyRange else np.nan,
-            'JS_random_mean': np.mean(rand_JS) if rand_JS else np.nan,
-            'RMSD_random_mean': np.mean(rand_RMSD) if rand_RMSD else np.nan,
+            'ANND_random': rand_metrics.get('ANND'),
+            'MPD_random': rand_metrics.get('MPD'),
+            'Coverage_Ratio_random': rand_metrics.get('Coverage_Ratio'),
+            'Energy_Range_random': rand_metrics.get('Energy_Range'),
+            'JS_Divergence_random': rand_metrics.get('JS_Divergence'),
+            'RMSD_Mean_random': rand_metrics.get('RMSD_Mean'),
 
             # 均匀采样结果
             'ANND_uniform': uniform_metrics.get('ANND'),
@@ -223,16 +213,17 @@ class SamplingComparisonAnalyser:
             # 改进百分比
             'ANND_improvement_pct': calculate_improvement(
                 sampled_metrics.get('ANND'),
-                np.mean(rand_ANND) if rand_ANND else np.nan
+                rand_metrics.get('ANND')
             ),
             'RMSD_improvement_pct': calculate_improvement(
                 sampled_metrics.get('RMSD_Mean'),
-                np.mean(rand_RMSD) if rand_RMSD else np.nan
+                rand_metrics.get('RMSD_Mean')
             ),
 
             # 统计显著性
-            'ANND_p_value': calculate_significance(sampled_metrics.get('ANND'), rand_ANND),
-            'RMSD_p_value': calculate_significance(sampled_metrics.get('RMSD_Mean'), rand_RMSD),
+            # 单次随机比较无法进行显著性检验，置 NaN
+            'ANND_p_value': np.nan,
+            'RMSD_p_value': np.nan,
 
             # 相对于均匀采样的改进
             'ANND_vs_uniform_pct': calculate_improvement(
@@ -265,10 +256,11 @@ class SamplingComparisonAnalyser:
         ordered = ["RMSD_Mean", "ANND", "MPD", "Coverage_Ratio", "Energy_Range", "JS_Divergence"]
         metrics_to_summarize = []
         for m in ordered:
+            # 随机列现在直接是 <Metric>_random
             metrics_to_summarize.append((
                 m,
                 f"{m}_sampled",
-                f"{m.replace('Coverage_Ratio','Coverage').replace('RMSD_Mean','RMSD').replace('JS_Divergence','JS')}_random_mean",
+                f"{m}_random",
                 f"{m}_uniform"
             ))
 
@@ -300,7 +292,7 @@ class SamplingComparisonAnalyser:
                 'Sampled_Mean': np.mean(sampled_means) if len(sampled_means) > 0 else np.nan,
                 'Sampled_Std': np.std(sampled_means, ddof=1) if len(sampled_means) >= 2 else np.nan,
                 'Random_Mean': np.mean(random_means) if len(random_means) > 0 else np.nan,
-                'Random_Std': np.std(random_means, ddof=1) if len(random_means) >= 2 else np.nan,
+                'Random_Std': np.nan,  # 单次随机，无标准差
                 'Uniform_Mean': np.mean(uniform_means) if len(uniform_means) > 0 else np.nan,
                 'Uniform_Std': np.std(uniform_means, ddof=1) if len(uniform_means) >= 2 else np.nan,
             })

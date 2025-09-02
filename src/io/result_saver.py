@@ -3,8 +3,10 @@
 import csv
 import logging
 import os
-from typing import Optional, List, Dict, Tuple, Sequence
+from typing import Optional, List, Dict, Tuple, Sequence, Iterable
 import datetime
+import json
+import re
 
 import numpy as np
 
@@ -142,89 +144,178 @@ class ResultSaver:
             logger.warning(f"导出均值结构失败: {metrics.system_name}: {e}")
 
     @staticmethod
-    def save_results(output_dir: str, analysis_results: List[Tuple], incremental: bool = False) -> None:
-        """保存分析结果，包括系统汇总、单体系详细结果和PCA分量"""
+    def save_results(output_dir: str, analysis_results: List[Tuple]) -> None:
+        """(兼容接口) 使用流式逻辑逐体系保存；不再区分增量/完整模式。"""
         logger = logging.getLogger(__name__)
+        for result in analysis_results or []:
+            try:
+                ResultSaver.save_single_system(output_dir, result, sampling_only=False)
+            except Exception as e:
+                logger.warning(f"批量兼容保存单体系失败(忽略): {e}")
+        # 批量调用后统一排序（若文件存在）
         try:
-            # 提取数据
-            all_metrics = []
+            ResultSaver.reorder_system_summary(output_dir)
+        except Exception:
+            pass
 
-            for result in analysis_results:
-                metrics, frames, swap_count, improve_ratio, pca_components_data, pca_model, rmsd_per_frame = result
-                all_metrics.append(metrics)
+    # -------------------- Streaming / Per-System Saving Enhancements --------------------
+    @staticmethod
+    def save_single_system(
+        output_dir: str,
+        result: Tuple,
+        sampling_only: bool = False,
+        flush_targets_hook: Optional[callable] = None,
+    ) -> None:
+        """流式保存单个体系的全部可用结果 (体系完成后立即调用)。
 
+        按当前模式与可用数据自动降级：
+          - 完整模式(result 长度>=7)：写 frame_metrics, append system_metrics_summary, mean_structure
+          - 仅采样模式/数据不足：只尝试导出均值结构(如果存在) + 采样帧（采样帧主要已在 analysis_targets.json 由调用方刷新）
 
-            if all_metrics:
-                # 保存系统汇总
-                if incremental:
-                    ResultSaver.save_system_summary_incremental(output_dir, all_metrics)
-                    # 续算也强制覆盖均值结构（保持与最新指标一致）
-                    for m in all_metrics:
-                        ResultSaver.export_mean_structure(output_dir, m, force_update=True)
-                else:
-                    # 完整保存逻辑 + 导出均值结构 JSON
-                    ResultSaver._save_system_summary_complete(output_dir, all_metrics)
-                    for m in all_metrics:
-                        ResultSaver.export_mean_structure(output_dir, m)
+        Args:
+            output_dir: run_* 目录
+            result: analyse_system 返回的 tuple
+            sampling_only: 是否 sampling_only 模式
+            flush_targets_hook: 可选回调，用于调用方在成功后刷新 analysis_targets.json
+        """
+        logger = logging.getLogger(__name__)
+        if not result:
+            return
+        try:
+            metrics = result[0]
+            # sampling_only 模式下只返回 (metrics, frames)
+            frames = result[1] if len(result) > 1 else []
+            # 完整模式下期望 7 元素
+            pca_components_data = result[4] if not sampling_only and len(result) > 4 else None
+            rmsd_per_frame = result[6] if not sampling_only and len(result) > 6 else None
 
-                # 保存单体系详细结果
-                for metrics, result in zip(all_metrics, analysis_results):
-                    frames = result[1]
-                    sampled_frames = [f.frame_id for f in frames if f.frame_id in metrics.sampled_frames]
-                    pca_components_data = result[4]  # PCA分量数据
-                    rmsd_per_frame = result[6]  # RMSD数据
-                    ResultSaver.save_frame_metrics(output_dir, metrics.system_name, frames, sampled_frames, pca_components_data, rmsd_per_frame, incremental=incremental)
+            # 1) system_metrics_summary.csv 追加写（仅完整模式且有足够数据）
+            if not sampling_only and hasattr(metrics, 'system_name'):
+                ResultSaver.append_system_summary_rows(output_dir, [metrics])
+                ResultSaver.export_mean_structure(output_dir, metrics, force_update=True)
+            elif sampling_only:
+                # 采样模式：仍尝试导出均值结构（如果 earlier pipeline 填充）
+                try:
+                    ResultSaver.export_mean_structure(output_dir, metrics, force_update=True)
+                except Exception:
+                    pass
 
-                # PCA分量已集成到单体系结果中，无需单独保存
+            # 2) frame_metrics_{system}.csv (仅完整模式)
+            if (not sampling_only) and frames and pca_components_data is not None:
+                try:
+                    sampled_frames = [fid for fid in getattr(metrics, 'sampled_frames', [])]
+                    ResultSaver.save_frame_metrics(
+                        output_dir=output_dir,
+                        system_name=metrics.system_name,
+                        frames=frames,
+                        sampled_frames=sampled_frames,
+                        pca_components_data=pca_components_data,
+                        rmsd_per_frame=rmsd_per_frame,
+                        incremental=False,
+                    )
+                except Exception as fe:
+                    logger.warning(f"单体系帧指标写入失败 {metrics.system_name}: {fe}")
 
+            # 3) 更新 progress.json
+            try:
+                ResultSaver._update_progress(output_dir, metrics.system_name)
+            except Exception as pe:
+                logger.warning(f"progress.json 更新失败 {metrics.system_name}: {pe}")
+
+            # 4) 可选刷新 analysis_targets.json (由 orchestrator 提供的 hook 控制频率)
+            if flush_targets_hook:
+                try:
+                    flush_targets_hook()
+                except Exception as he:
+                    logger.warning(f"analysis_targets.json 刷新失败: {he}")
         except Exception as e:
-            ErrorHandler.log_detailed_error(
-                logger, e, "保存分析结果失败",
-                additional_info={
-                    "输出目录": output_dir,
-                    "结果数量": len(analysis_results) if analysis_results else 0,
-                    "增量模式": incremental
-                }
-            )
-            raise
+            logger.error(f"流式保存体系结果失败: {e}")
 
     @staticmethod
-    def _save_system_summary_complete(output_dir: str, new_metrics: List[TrajectoryMetrics]) -> None:
-        """保存完整的系统汇总（非增量模式）"""
+    def _update_progress(output_dir: str, system_name: str) -> None:
+        """将单个 system_name 追加到 progress.json (幂等)"""
+        combined_dir = os.path.join(output_dir, "combined_analysis_results")
+        FileUtils.ensure_dir(combined_dir)
+        progress_path = os.path.join(combined_dir, "progress.json")
+        data = {"processed_systems": [], "last_updated": None}
+        if os.path.exists(progress_path):
+            try:
+                with open(progress_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f) or data
+            except Exception:
+                pass
+        if system_name not in data.get('processed_systems', []):
+            data['processed_systems'].append(system_name)
+        data['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
+        tmp = progress_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, progress_path)
+
+    @staticmethod
+    def append_system_summary_rows(output_dir: str, metrics_list: Iterable) -> None:
+        """通用追加接口：向 system_metrics_summary.csv 追加多个 metrics (无排序)。"""
+        if not metrics_list:
+            return
+        combined_dir = os.path.join(output_dir, 'combined_analysis_results')
+        FileUtils.ensure_dir(combined_dir)
+        csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
+        file_exists = os.path.exists(csv_path)
         try:
-            combined_analysis_dir = os.path.join(output_dir, "combined_analysis_results")
-            FileUtils.ensure_dir(combined_analysis_dir)
-            csv_path = os.path.join(combined_analysis_dir, "system_metrics_summary.csv")
+            with open(csv_path, 'a' if file_exists else 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(ResultSaver.SYSTEM_SUMMARY_HEADERS)
+                for m in metrics_list:
+                    try:
+                        row = ResultSaver._format_metric_row(m)
+                        writer.writerow(row)
+                    except Exception as rexc:
+                        logging.getLogger(__name__).warning(f"写入单行失败 {getattr(m,'system_name','?')}: {rexc}")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            logging.getLogger(__name__).error(f"追加 system_metrics_summary 失败: {e}")
 
-            all_rows = []
-            for m in new_metrics:
-                row = ResultSaver._format_metric_row(m)
-                all_rows.append(row)
-
-            # 排序
+    @staticmethod
+    def reorder_system_summary(output_dir: str) -> None:
+        """读取当前 system_metrics_summary.csv 重新排序并原子覆盖。
+    仅基于 system_name 中的 mol/conf/温度数值排序。
+        """
+        combined_dir = os.path.join(output_dir, 'combined_analysis_results')
+        csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
+        if not os.path.exists(csv_path):
+            return
+        try:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = list(csv.reader(f))
+            if not reader:
+                return
+            header = reader[0]
+            rows = reader[1:]
             def sort_key(row):
                 try:
                     system_name = row[0]
-                    import re
                     match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
                     if match:
                         mol_id, conf, temp = match.groups()
                         return (int(mol_id), int(conf), int(temp))
                 except Exception:
                     pass
-                return (9999, 9999, 9999)
-
-            all_rows.sort(key=sort_key)
-
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(ResultSaver.SYSTEM_SUMMARY_HEADERS)
-                writer.writerows(all_rows)
-
+                return (999999, 999999, 999999)
+            rows.sort(key=sort_key)
+            tmp = csv_path + '.tmp'
+            with open(tmp, 'w', newline='', encoding='utf-8') as f:
+                w = csv.writer(f)
+                w.writerow(header)
+                w.writerows(rows)
+            os.replace(tmp, csv_path)
+            logging.getLogger(__name__).info("system_metrics_summary.csv 已重新排序")
         except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to save complete system summary: {e}")
-            raise
+            logging.getLogger(__name__).warning(f"system_metrics_summary 排序失败(忽略): {e}")
+
+    @staticmethod
+    # 已移除旧的完整/增量系统汇总保存函数，统一使用 append + reorder 机制
 
     @staticmethod
     def save_frame_metrics(
@@ -313,188 +404,26 @@ class ResultSaver:
             logger.error(f"Failed to save frame metrics for {system_name}: {e}")
             raise
 
-    @staticmethod
-    def save_system_summary_incremental(
-        output_dir: str, new_metrics: List[TrajectoryMetrics]
-    ) -> None:
-        """Save system summary with incremental support - append new rows without rewriting entire file"""
-        try:
-            combined_analysis_dir = os.path.join(
-                output_dir, "combined_analysis_results"
-            )
-            FileUtils.ensure_dir(combined_analysis_dir)
-            csv_path = os.path.join(combined_analysis_dir, "system_metrics_summary.csv")
-            progress_path = os.path.join(combined_analysis_dir, "progress.json")
+    # 旧增量与采样记录聚合函数已移除
 
-            # 读取已处理的系统
-            processed_systems = set()
-            if os.path.exists(progress_path):
-                try:
-                    import json
-                    with open(progress_path, 'r', encoding='utf-8') as f:
-                        progress_data = json.load(f)
-                        processed_systems = set(progress_data.get('processed_systems', []))
-                except Exception:
-                    processed_systems = set()
 
-            # 过滤出新的系统
-            new_system_metrics = [m for m in new_metrics if m.system_name not in processed_systems]
-            
-            if not new_system_metrics:
-                logger = logging.getLogger(__name__)
-                logger.info("所有系统已处理完毕，无需更新")
-                return
-
-            # 检查文件是否存在
-            file_exists = os.path.exists(csv_path)
-            write_mode = 'a' if file_exists else 'w'
-
-            with open(csv_path, write_mode, newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                
-                # 只有在创建新文件时写入表头
-                if not file_exists:
-                    writer.writerow(ResultSaver.SYSTEM_SUMMARY_HEADERS)
-
-                # 追加新数据
-                for m in new_system_metrics:
-                    row = ResultSaver._format_metric_row(m)
-                    writer.writerow(row)
-                    
-                # 确保数据写入磁盘
-                f.flush()
-                os.fsync(f.fileno())
-
-            # 更新进度文件
-            processed_systems.update(m.system_name for m in new_system_metrics)
-            progress_data = {
-                'processed_systems': list(processed_systems),
-                'last_updated': str(datetime.datetime.utcnow().isoformat() + "Z")
-            }
-            with open(progress_path, 'w', encoding='utf-8') as f:
-                json.dump(progress_data, f, ensure_ascii=False, indent=2)
-
-            logger = logging.getLogger(__name__)
-            logger.info(f"增量保存了 {len(new_system_metrics)} 个新系统的汇总数据")
-
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to save system summary incrementally: {e}")
-            raise
+    # ---- DeepMD Export Functionality (merged from deepmd_exporter.py) ----
+    ALL_TYPE_MAP = [
+        "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+        "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+        "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
+        "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
+        "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
+    ]
 
     @staticmethod
-    def save_sampling_records(output_dir: str) -> None:
-        """保存所有体系的采样记录到CSV文件
-
-        从single_analysis_results目录中读取各个系统的frame_metrics_*.csv文件，
-        提取被选择的帧号（Selected=1），并保存到combined_analysis_results目录中。
-        """
-        logger = logging.getLogger(__name__)
-
-        try:
-            # 确定输入和输出路径
-            single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
-            combined_analysis_dir = os.path.join(output_dir, "combined_analysis_results")
-            FileUtils.ensure_dir(combined_analysis_dir)
-            
-            # 采样记录保存到output_dir目录（combined_analysis_results的父目录）
-            sampling_records_path = os.path.join(output_dir, "sampling_records.csv")
-
-            # 检查single_analysis_results目录是否存在
-            if not os.path.exists(single_analysis_dir):
-                logger.warning(f"single_analysis_results目录不存在: {single_analysis_dir}")
-                return
-
-            # 查找所有frame_metrics_*.csv文件
-            frame_metrics_files = []
-            for filename in os.listdir(single_analysis_dir):
-                if filename.startswith("frame_metrics_") and filename.endswith(".csv"):
-                    frame_metrics_files.append(os.path.join(single_analysis_dir, filename))
-
-            if not frame_metrics_files:
-                logger.warning(f"在{single_analysis_dir}中未找到任何frame_metrics_*.csv文件")
-                return
-
-
-            # 读取 system_name 到 system_path 的映射表
-            import json
-            system_map_path = os.path.join(output_dir, "system_paths_map.json")
-            system_name_to_path = {}
-            if os.path.exists(system_map_path):
-                try:
-                    with open(system_map_path, "r", encoding="utf-8") as f:
-                        system_name_to_path = json.load(f)
-                except Exception as e:
-                    logger.warning(f"读取 system_paths_map.json 失败: {e}")
-
-            all_sampling_records = []
-            for csv_file_path in frame_metrics_files:
-                try:
-                    filename = os.path.basename(csv_file_path)
-                    system_name = filename.replace("frame_metrics_", "").replace(".csv", "")
-                    # 优先用映射表
-                    system_path = system_name_to_path.get(system_name, "")
-                    sampled_frames = []
-                    with open(csv_file_path, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                        # 读取CSV数据
-                        csv_content = "\n".join(lines)
-                        reader = csv.DictReader(csv_content.split('\n'))
-                        for row in reader:
-                            if not row or not any(row.values()):
-                                continue
-                            selected = row.get("Selected", "0").strip()
-                            if selected == "1":
-                                frame_id = row.get("Frame_ID", "").strip()
-                                if frame_id:
-                                    try:
-                                        sampled_frames.append(int(frame_id))
-                                    except ValueError:
-                                        logger.warning(f"无效的Frame_ID: {frame_id} 在文件 {filename}")
-                    sampled_frames.sort()
-                    if sampled_frames:
-                        sampled_frames_str = f"[{','.join(map(str, sampled_frames))}]"
-                    else:
-                        sampled_frames_str = "[]"
-                    all_sampling_records.append([system_name, system_path, sampled_frames_str])
-                except Exception as e:
-                    logger.error(f"处理文件 {csv_file_path} 时出错: {str(e)}")
-                    continue
-
-            if not all_sampling_records:
-                logger.warning("未找到任何有效的采样记录")
-                return
-
-            # 按照system_metrics_summary的排序逻辑对记录进行排序
-            def sort_key(record):
-                try:
-                    system_name = record[0]
-                    import re
-                    match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
-                    if match:
-                        mol_id, conf, temp = match.groups()
-                        return (int(mol_id), int(conf), int(temp))
-                except Exception:
-                    pass
-                return (9999, 9999, 9999)
-
-            all_sampling_records.sort(key=sort_key)
-
-            # 保存到CSV文件
-            with open(sampling_records_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(ResultSaver.SAMPLING_RECORDS_HEADERS)
-                writer.writerows(all_sampling_records)
-
-            logger.info(f"采样记录已保存到: {sampling_records_path}")
-            logger.info(f"共处理了 {len(all_sampling_records)} 个系统")
-
-        except Exception as e:
-            ErrorHandler.log_detailed_error(
-                logger, e, "保存采样记录失败",
-                additional_info={"输出目录": output_dir}
-            )
-            raise
+    def _build_frame_id_index(frames: Sequence) -> Dict[int, int]:
+        mapping: Dict[int, int] = {}
+        for idx, f in enumerate(frames):
+            fid = getattr(f, 'frame_id', None)
+            if fid is not None and fid not in mapping:
+                mapping[fid] = idx
+        return mapping
 
     @staticmethod
     def export_sampled_frames_per_system(
@@ -506,380 +435,193 @@ class ResultSaver:
         logger,
         force: bool = False,
     ) -> Optional[str]:
-        """
-        Export sampled frames for a single system to DeepMD format.
-
-        Args:
-            frames: Sequence of frame objects
-            sampled_frame_ids: List of sampled frame IDs
-            system_path: Path to the ABACUS system directory
-            output_root: Root output directory
-            system_name: Name of the system
-            logger: Logger instance
-            force: Whether to force re-export
-
-        Returns:
-            Path to the exported directory or None if failed
-        """
         if not sampled_frame_ids:
             logger.debug(f"[deepmd-export] {system_name} 无采样帧，跳过导出")
             return None
-
         target_dir = os.path.join(output_root, system_name)
         marker_file = os.path.join(target_dir, 'export.done')
-
         if os.path.isdir(target_dir) and os.path.exists(marker_file) and not force:
             logger.debug(f"[deepmd-export] {system_name} 已存在且未强制覆盖，跳过")
             return target_dir
-
         try:
             import dpdata  # type: ignore
             id2idx = ResultSaver._build_frame_id_index(frames)
             subset_indices = [id2idx[fid] for fid in sampled_frame_ids if fid in id2idx]
-
             if not subset_indices:
                 logger.warning(f"[deepmd-export] {system_name} 采样帧索引映射为空，跳过")
                 return None
-
-            ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
+            ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
             n_total = len(ls)
             valid_subset = [i for i in subset_indices if 0 <= i < n_total]
-
             if not valid_subset:
                 logger.warning(f"[deepmd-export] {system_name} 有效帧子集为空，跳过")
                 return None
-
             sub_ls = ls[valid_subset]
             os.makedirs(target_dir, exist_ok=True)
             sub_ls.to_deepmd_npy(target_dir)
-
             with open(marker_file, 'w', encoding='utf-8') as f:
                 f.write(f"frames={len(valid_subset)}\n")
-
             logger.info(f"[deepmd-export] 导出 {system_name} deepmd npy 成功，帧数={len(valid_subset)} -> {target_dir}")
             return target_dir
-
         except Exception as e:
             logger.error(f"[deepmd-export] 导出 {system_name} 失败: {e}")
             return None
 
+    # ---- 批量 DeepMD 导出 (多体系合并) ----
     @staticmethod
-    def _build_frame_id_index(frames: Sequence) -> Dict[int, int]:
-        """Build mapping from frame_id to frame index"""
-        mapping: Dict[int, int] = {}
-        for idx, f in enumerate(frames):
-            fid = getattr(f, 'frame_id', None)
-            if fid is not None and fid not in mapping:
-                mapping[fid] = idx
-        return mapping
+    def _dir_non_empty(path: str) -> bool:
+        return os.path.isdir(path) and any(os.scandir(path))
 
-
-# ---- DeepMD Export Functionality (merged from deepmd_exporter.py) ----
-
-ALL_TYPE_MAP = [
-    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
-    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
-    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
-    "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
-    "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
-]
-
-@staticmethod
-def _build_frame_id_index(frames: Sequence) -> Dict[int, int]:
-    """Build mapping from frame_id to frame index"""
-    mapping: Dict[int, int] = {}
-    for idx, f in enumerate(frames):
-        fid = getattr(f, 'frame_id', None)
-        if fid is not None and fid not in mapping:
-            mapping[fid] = idx
-    return mapping
-
-@staticmethod
-def export_sampled_frames_per_system(
-    frames: Sequence,
-    sampled_frame_ids: List[int],
-    system_path: str,
-    output_root: str,
-    system_name: str,
-    logger,
-    force: bool = False,
-    ) -> Optional[str]:
-    """
-    Export sampled frames for a single system to DeepMD format.
-
-    Args:
-        frames: Sequence of frame objects
-        sampled_frame_ids: List of sampled frame IDs
-        system_path: Path to the ABACUS system directory
-        output_root: Root output directory
-        system_name: Name of the system
-        logger: Logger instance
-        force: Whether to force re-export
-
-    Returns:
-        Path to the exported directory or None if failed
-    """
-    if not sampled_frame_ids:
-        logger.debug(f"[deepmd-export] {system_name} 无采样帧，跳过导出")
-        return None
-
-    target_dir = os.path.join(output_root, system_name)
-    marker_file = os.path.join(target_dir, 'export.done')
-
-    if os.path.isdir(target_dir) and os.path.exists(marker_file) and not force:
-        logger.debug(f"[deepmd-export] {system_name} 已存在且未强制覆盖，跳过")
-        return target_dir
-
-    try:
-        import dpdata  # type: ignore
-        id2idx = ResultSaver._build_frame_id_index(frames)
-        subset_indices = [id2idx[fid] for fid in sampled_frame_ids if fid in id2idx]
-
-        if not subset_indices:
-            logger.warning(f"[deepmd-export] {system_name} 采样帧索引映射为空，跳过")
-            return None
-
-        ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
-        n_total = len(ls)
-        valid_subset = [i for i in subset_indices if 0 <= i < n_total]
-
-        if not valid_subset:
-            logger.warning(f"[deepmd-export] {system_name} 有效帧子集为空，跳过")
-            return None
-
-        sub_ls = ls[valid_subset]
-        os.makedirs(target_dir, exist_ok=True)
-        sub_ls.to_deepmd_npy(target_dir)
-
-        with open(marker_file, 'w', encoding='utf-8') as f:
-            f.write(f"frames={len(valid_subset)}\n")
-
-        logger.info(f"[deepmd-export] 导出 {system_name} deepmd npy 成功，帧数={len(valid_subset)} -> {target_dir}")
-        return target_dir
-
-    except Exception as e:
-        logger.error(f"[deepmd-export] 导出 {system_name} 失败: {e}")
-        return None
-
-
-# ---- Batch DeepMD Export Functionality (merged from sampled_frames_to_deepmd.py) ----
-
-@staticmethod
-def _dir_non_empty(path: str) -> bool:
-    """Check if directory exists and is not empty"""
-    return os.path.isdir(path) and any(os.scandir(path))
-
-@staticmethod
-def get_md_parameters(system_path: str, logger):
-    """
-    Extract md_dumpfreq and total_steps from ABACUS output directory.
-
-    Expected directory structure: <system_path>/OUT.ABACUS/
-    1. Read INPUT for md_dumpfreq (default to 1 if not found)
-    2. Parse running_md.log for maximum step number
-    Returns (md_dumpfreq, total_steps)
-    """
-    out_dir = os.path.join(system_path, 'OUT.ABACUS')
-    input_file = os.path.join(system_path, 'INPUT')
-    log_file = os.path.join(out_dir, 'running_md.log')
-    md_dumpfreq = 1
-    total_steps = 0
-
-    try:
-        if os.path.exists(input_file):
-            with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    ls = line.strip()
-                    if not ls or ls.startswith('#'):
-                        continue
-                    if 'md_dumpfreq' in ls.split('#')[0]:
-                        parts = ls.split()
-                        for i, p in enumerate(parts):
-                            if p.lower() == 'md_dumpfreq' and i + 1 < len(parts):
-                                try:
-                                    md_dumpfreq = int(parts[i+1])
-                                except ValueError:
-                                    pass
-                                break
-                        break
-
-        if os.path.exists(log_file):
-            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    ls = line.strip()
-                    if not ls or ls.startswith('#'):
-                        continue
-                    # Log may start with step
-                    first = ls.split()[0]
-                    if first.isdigit():
-                        step_val = int(first)
-                        if step_val > total_steps:
-                            total_steps = step_val
-    except Exception as e:
-        logger.warning(f"Failed to parse MD parameters: {e}")
-
-    return md_dumpfreq, total_steps
-
-@staticmethod
-def steps_to_frame_indices(sampled_steps, md_dumpfreq, n_frames, logger):
-    """Convert MD steps to frame indices"""
-    if md_dumpfreq <= 0:
+    @staticmethod
+    def get_md_parameters(system_path: str, logger):
+        out_dir = os.path.join(system_path, 'OUT.ABACUS')
+        input_file = os.path.join(system_path, 'INPUT')
+        log_file = os.path.join(out_dir, 'running_md.log')
         md_dumpfreq = 1
-    result = []
-    for st in sampled_steps:
-        frame_idx = st // md_dumpfreq
-        if frame_idx >= n_frames:
-            logger.warning(f"Step {st} -> frame index {frame_idx} out of range (max {n_frames-1}), using last frame")
-            frame_idx = n_frames - 1
-        elif frame_idx < 0:
-            logger.warning(f"Step {st} -> negative frame index {frame_idx}, discarding")
-            continue
-        result.append(frame_idx)
-    return result
+        total_steps = 0
+        try:
+            if os.path.exists(input_file):
+                with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        ls = line.strip()
+                        if not ls or ls.startswith('#'):
+                            continue
+                        if 'md_dumpfreq' in ls.split('#')[0]:
+                            parts = ls.split()
+                            for i, p in enumerate(parts):
+                                if p.lower() == 'md_dumpfreq' and i + 1 < len(parts):
+                                    try:
+                                        md_dumpfreq = int(parts[i+1])
+                                    except ValueError:
+                                        pass
+                                    break
+                            break
+            if os.path.exists(log_file):
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        ls = line.strip()
+                        if not ls or ls.startswith('#'):
+                            continue
+                        first = ls.split()[0]
+                        if first.isdigit():
+                            step_val = int(first)
+                            if step_val > total_steps:
+                                total_steps = step_val
+        except Exception as e:
+            logger.warning(f"Failed to parse MD parameters: {e}")
+        return md_dumpfreq, total_steps
 
-@staticmethod
-def export_sampled_frames_to_deepmd(run_dir: str, output_dir: str, split_ratio: List[float] = None,
-                                   logger=None, force_reexport: bool = False, seed: int = 42) -> None:
-    """
-    Export sampled frames from analysis_targets.json to DeepMD format with optional splitting.
-
-    Args:
-        run_dir: Analysis results directory containing analysis_targets.json
-        output_dir: Output directory for DeepMD npy files
-        split_ratio: List of split ratios, e.g., [0.8, 0.2]
-        logger: Optional logger instance
-        force_reexport: Whether to force re-export (ignore existing files)
-        seed: Random seed for splitting
-    """
-    import json
-    import dpdata
-
-    if logger is None:
-        from ..utils.logmanager import create_standard_logger
-        logger = create_standard_logger(__name__, level=20)
-
-    # Skip if directory exists and not forcing
-    if ResultSaver._dir_non_empty(output_dir) and not force_reexport:
-        logger.info(f"Output directory exists and is not empty, skipping export: {output_dir}")
-        logger.info("To re-export, set force_reexport=True or clear the directory")
-        return
-
-    logger.info("Starting sampled frames export task")
-    targets_path = os.path.join(run_dir, 'analysis_targets.json')
-
-    if not os.path.exists(targets_path):
-        logger.error(f"Targets file not found: {targets_path}")
-        return
-
-    with open(targets_path, 'r', encoding='utf-8') as f:
-        targets = json.load(f)
-
-    ms = dpdata.MultiSystems()
-    total_sampled_frames = 0
-
-    for mol in targets['molecules'].values():
-        for sys_name, sys_info in mol['systems'].items():
-            system_path = sys_info['system_path']
-            sampled_frames = json.loads(sys_info['sampled_frames']) if isinstance(sys_info['sampled_frames'], str) else sys_info['sampled_frames']
-
-            if not os.path.exists(system_path):
-                logger.warning(f"System path not found: {system_path}")
+    @staticmethod
+    def steps_to_frame_indices(sampled_steps, md_dumpfreq, n_frames, logger):
+        if md_dumpfreq <= 0:
+            md_dumpfreq = 1
+        result = []
+        for st in sampled_steps:
+            frame_idx = st // md_dumpfreq
+            if frame_idx >= n_frames:
+                logger.warning(f"Step {st} -> frame index {frame_idx} out of range (max {n_frames-1}), using last frame")
+                frame_idx = n_frames - 1
+            elif frame_idx < 0:
+                logger.warning(f"Step {st} -> negative frame index {frame_idx}, discarding")
                 continue
+            result.append(frame_idx)
+        return result
 
-            try:
-                logger.info(f"Processing {sys_name}, original sampled list length: {len(sampled_frames)}")
-                dd = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
-                n_frames = len(dd)
-
-                if n_frames == 0:
-                    logger.warning(f"{sys_name} has no available frames, skipping")
+    @staticmethod
+    def export_sampled_frames_to_deepmd(run_dir: str, output_dir: str, split_ratio: List[float] = None,
+                                       logger=None, force_reexport: bool = False, seed: int = 42) -> None:
+        import json
+        import dpdata
+        if logger is None:
+            from ..utils.logmanager import create_standard_logger
+            logger = create_standard_logger(__name__, level=20)
+        if ResultSaver._dir_non_empty(output_dir) and not force_reexport:
+            logger.info(f"Output directory exists and is not empty, skipping export: {output_dir}")
+            logger.info("To re-export, set force_reexport=True or clear the directory")
+            return
+        logger.info("Starting sampled frames export task")
+        targets_path = os.path.join(run_dir, 'analysis_targets.json')
+        if not os.path.exists(targets_path):
+            logger.error(f"Targets file not found: {targets_path}")
+            return
+        with open(targets_path, 'r', encoding='utf-8') as f:
+            targets = json.load(f)
+        ms = dpdata.MultiSystems()
+        total_sampled_frames = 0
+        for mol in targets['molecules'].values():
+            for sys_name, sys_info in mol['systems'].items():
+                system_path = sys_info['system_path']
+                sampled_frames = json.loads(sys_info['sampled_frames']) if isinstance(sys_info['sampled_frames'], str) else sys_info['sampled_frames']
+                if not os.path.exists(system_path):
+                    logger.warning(f"System path not found: {system_path}")
                     continue
+                try:
+                    logger.info(f"Processing {sys_name}, original sampled list length: {len(sampled_frames)}")
+                    dd = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
+                    n_frames = len(dd)
+                    if n_frames == 0:
+                        logger.warning(f"{sys_name} has no available frames, skipping")
+                        continue
+                    treat_as_steps = False
+                    if sampled_frames:
+                        max_val = max(sampled_frames)
+                        if max_val >= n_frames:
+                            treat_as_steps = True
+                    if treat_as_steps:
+                        md_dumpfreq, total_steps = ResultSaver.get_md_parameters(system_path, logger)
+                        logger.info(f"Detected sampled list as steps, converting using md_dumpfreq={md_dumpfreq}")
+                        sampled_frames_conv = ResultSaver.steps_to_frame_indices(sampled_frames, md_dumpfreq, n_frames, logger)
+                    else:
+                        sampled_frames_conv = sampled_frames
+                    if (not treat_as_steps and sampled_frames_conv and min(sampled_frames_conv) >= 1
+                            and max(sampled_frames_conv) == n_frames and 0 not in sampled_frames_conv):
+                        logger.info(f"Detected possible 1-based frame indices, auto-correcting by -1 ({sys_name})")
+                        sampled_frames_conv = [i - 1 for i in sampled_frames_conv]
+                    valid_indices = [i for i in sampled_frames_conv if 0 <= i < n_frames]
+                    invalid_count = len(sampled_frames_conv) - len(valid_indices)
+                    if invalid_count > 0:
+                        logger.warning(f"{sys_name} filtered out {invalid_count} out-of-bounds indices (valid frame range 0~{n_frames-1})")
+                    if not valid_indices:
+                        logger.warning(f"{sys_name} has no valid sampled frames, skipping")
+                        continue
+                    ordered_indices = list(dict.fromkeys(valid_indices))
+                    sub_dd = dd[ordered_indices]
+                    ms.append(sub_dd)
+                    total_sampled_frames += len(ordered_indices)
+                    logger.info(f"Successfully added {sys_name} frames: {len(ordered_indices)} (original list {len(sampled_frames)}, converted {len(sampled_frames_conv)})")
+                except Exception as e:
+                    logger.error(f"Failed to read {system_path}: {e}")
+        logger.info(f"Total sampled frames: {total_sampled_frames}")
+        logger.info(f"MultiSystems info: {ms}")
+        os.makedirs(output_dir, exist_ok=True)
+        ms.to_deepmd_npy(output_dir)
+        logger.info(f"Exported DeepMD npy to {output_dir}")
+        if split_ratio:
+            ResultSaver.split_and_save(ms, output_dir, split_ratio, logger, seed=seed)
 
-                # Determine if sampled_frames looks like "steps" rather than "frame indices"
-                treat_as_steps = False
-                if sampled_frames:
-                    max_val = max(sampled_frames)
-                    min_val = min(sampled_frames)
-                    if max_val >= n_frames:  # Obviously exceeds frame count => treat as steps
-                        treat_as_steps = True
-
-                if treat_as_steps:
-                    md_dumpfreq, total_steps = ResultSaver.get_md_parameters(system_path, logger)
-                    logger.info(f"Detected sampled list as steps, converting using md_dumpfreq={md_dumpfreq} (max step {max_val}, parsed max actual step {total_steps})")
-                    sampled_frames_conv = ResultSaver.steps_to_frame_indices(sampled_frames, md_dumpfreq, n_frames, logger)
-                else:
-                    sampled_frames_conv = sampled_frames
-
-                # Possible 1-based -> 0-based correction (heuristic, only for non-step cases)
-                if (not treat_as_steps and sampled_frames_conv and min(sampled_frames_conv) >= 1
-                        and max(sampled_frames_conv) == n_frames and 0 not in sampled_frames_conv):
-                    logger.info(f"Detected possible 1-based frame indices, auto-correcting by -1 ({sys_name})")
-                    sampled_frames_conv = [i - 1 for i in sampled_frames_conv]
-
-                # Filter out-of-bounds indices
-                valid_indices = [i for i in sampled_frames_conv if 0 <= i < n_frames]
-                invalid_count = len(sampled_frames_conv) - len(valid_indices)
-
-                if invalid_count > 0:
-                    logger.warning(f"{sys_name} filtered out {invalid_count} out-of-bounds indices (valid frame range 0~{n_frames-1})")
-
-                if not valid_indices:
-                    logger.warning(f"{sys_name} has no valid sampled frames, skipping")
-                    continue
-
-                # Remove duplicates while preserving order
-                ordered_indices = list(dict.fromkeys(valid_indices))
-                sub_dd = dd[ordered_indices]
-                ms.append(sub_dd)
-                total_sampled_frames += len(ordered_indices)
-                logger.info(f"Successfully added {sys_name} frames: {len(ordered_indices)} (original list {len(sampled_frames)}, converted {len(sampled_frames_conv)})")
-
-            except Exception as e:
-                logger.error(f"Failed to read {system_path}: {e}")
-
-    logger.info(f"Total sampled frames: {total_sampled_frames}")
-    logger.info(f"MultiSystems info: {ms}")
-
-    os.makedirs(output_dir, exist_ok=True)
-    ms.to_deepmd_npy(output_dir)
-    logger.info(f"Exported DeepMD npy to {output_dir}")
-
-    if split_ratio:
-        ResultSaver.split_and_save(ms, output_dir, split_ratio, logger, seed=seed)
-
-@staticmethod
-def split_and_save(ms, output_dir: str, split_ratio: List[float], logger, seed: int = 42) -> None:
-    """Split and save MultiSystems dataset"""
-    import dpdata
-    import numpy as np
-
-    total_frames = ms.get_nframes()
-    logger.info(f"Starting dataset split, total frames: {total_frames}")
-
-    indices = np.arange(total_frames)
-    rng = np.random.default_rng(seed)
-    rng.shuffle(indices)
-
-    split_points = np.cumsum([int(r * total_frames) for r in split_ratio[:-1]])
-    splits = np.split(indices, split_points)
-
-    for i, idx in enumerate(splits):
-        sub_ms = dpdata.MultiSystems()
-        frame_offset = 0
-
-        for sys in ms.systems:
-            sys_frames = len(sys)  # Use len() instead of get_nframes()
-            sys_indices = [j for j in idx if frame_offset <= j < frame_offset + sys_frames]
-
-            if sys_indices:
-                local_indices = [j - frame_offset for j in sys_indices]
-                # Correction: use indices instead of subset method
-                sub_sys = sys[local_indices]
-                sub_ms.append(sub_sys)
-
-            frame_offset += sys_frames
-
-        sub_dir = os.path.join(output_dir, f"split_{i}")
-        os.makedirs(sub_dir, exist_ok=True)
-        sub_ms.to_deepmd_npy(sub_dir)
-        logger.info(f"Saved split subset {sub_dir}, frames: {len(idx)}")
+    @staticmethod
+    def split_and_save(ms, output_dir: str, split_ratio: List[float], logger, seed: int = 42) -> None:
+        import dpdata
+        import numpy as np
+        total_frames = ms.get_nframes()
+        logger.info(f"Starting dataset split, total frames: {total_frames}")
+        indices = np.arange(total_frames)
+        rng = np.random.default_rng(seed)
+        rng.shuffle(indices)
+        split_points = np.cumsum([int(r * total_frames) for r in split_ratio[:-1]])
+        splits = np.split(indices, split_points)
+        for i, idx in enumerate(splits):
+            sub_ms = dpdata.MultiSystems()
+            frame_offset = 0
+            for sys in ms.systems:
+                sys_frames = len(sys)
+                sys_indices = [j for j in idx if frame_offset <= j < frame_offset + sys_frames]
+                if sys_indices:
+                    local_indices = [j - frame_offset for j in sys_indices]
+                    sub_sys = sys[local_indices]
+                    sub_ms.append(sub_sys)
+                frame_offset += sys_frames
+            sub_dir = os.path.join(output_dir, f"split_{i}")
+            os.makedirs(sub_dir, exist_ok=True)
+            sub_ms.to_deepmd_npy(sub_dir)
+            logger.info(f"Saved split subset {sub_dir}, frames: {len(idx)}")
