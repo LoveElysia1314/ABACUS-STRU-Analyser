@@ -562,7 +562,7 @@ class MainApp:
         elapsed = time.time() - start_time
 
         # 计算采样统计
-        swap_counts = [result[3] for result in analysis_results]
+        swap_counts = [result[2] for result in analysis_results]
 
         self.logger.info("=" * 60)
         self.logger.info(f"分析完成! 处理体系: {len(analysis_results)}/{len(path_manager.targets)}")
