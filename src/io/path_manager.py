@@ -429,8 +429,13 @@ class PathManager:
                         "system_path": target.system_path,
                         "stru_files_count": len(target.stru_files),
                         "source_hash": target.source_hash,
-                        "sampled_frames": sampled_frames_compact,
                     }
+                    # 始终添加sampled_frames字段，确保采样列表被输出到JSON中
+                    if sampled_frames_compact is not None:
+                        system_data["sampled_frames"] = sampled_frames_compact
+                    else:
+                        # 即使为空也添加该字段，避免字段缺失
+                        system_data["sampled_frames"] = "[]"
                     mol_data["systems"][target.system_name] = system_data
 
                 analysis_data["molecules"][mol_id] = mol_data
@@ -514,8 +519,10 @@ class PathManager:
 
                     # 兼容性：若 JSON 中缺失某些字段，使用解析出的值或安全默认值
                     # 处理sampled_frames：可能是字符串格式（紧凑模式）或列表格式
-                    sampled_frames_data = system_data.get("sampled_frames", [])
-                    if isinstance(sampled_frames_data, str):
+                    sampled_frames_data = system_data.get("sampled_frames")
+                    if sampled_frames_data is None:
+                        sampled_frames_data = []
+                    elif isinstance(sampled_frames_data, str):
                         try:
                             sampled_frames_data = json.loads(sampled_frames_data)
                         except (json.JSONDecodeError, TypeError):
@@ -729,3 +736,27 @@ class PathManager:
             self.logger.info(f"成功加载 {loaded_count} 个系统的采样帧信息")
         else:
             self.logger.info("未找到任何采样帧信息文件")
+
+    def update_sampled_frames_from_results(self, analysis_results: List[tuple]) -> None:
+        """从分析结果中直接更新采样帧信息到targets"""
+        if not analysis_results:
+            return
+        
+        # 建立 system_name -> sampled_frames 的映射
+        sampled_frames_map = {}
+        for result in analysis_results:
+            if len(result) >= 2:
+                metrics = result[0]
+                system_name = getattr(metrics, 'system_name', 'unknown')
+                sampled_frames = getattr(metrics, 'sampled_frames', [])
+                sampled_frames_map[system_name] = sampled_frames
+                
+        # 同步采样帧到PathManager.targets
+        updated_count = 0
+        for target in self.targets:
+            if target.system_name in sampled_frames_map:
+                target.sampled_frames = sampled_frames_map[target.system_name]
+                updated_count += 1
+                self.logger.debug(f"更新采样帧: {target.system_name} ({len(target.sampled_frames)} 帧)")
+                
+        self.logger.info(f"从分析结果同步采样帧信息: {updated_count} 个系统")

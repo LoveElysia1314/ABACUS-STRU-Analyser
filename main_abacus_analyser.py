@@ -436,6 +436,16 @@ class AnalysisOrchestrator:
                         # 流式保存单体系结果
                         if self.streaming_enabled:
                             try:
+                                # 立即同步当前系统的采样帧到PathManager.targets
+                                if len(result) >= 2:
+                                    metrics = result[0]
+                                    system_name_curr = getattr(metrics, 'system_name', 'unknown')
+                                    sampled_frames_curr = getattr(metrics, 'sampled_frames', [])
+                                    for target in path_manager.targets:
+                                        if target.system_name == system_name_curr:
+                                            target.sampled_frames = sampled_frames_curr
+                                            break
+                                
                                 ResultSaver.save_single_system(
                                     output_dir=self.current_output_dir,
                                     result=result,
@@ -541,6 +551,16 @@ class AnalysisOrchestrator:
                     # 流式保存
                     if self.streaming_enabled:
                         try:
+                            # 立即同步当前系统的采样帧到PathManager.targets
+                            if len(result) >= 2:
+                                metrics = result[0]
+                                system_name_curr = getattr(metrics, 'system_name', 'unknown')
+                                sampled_frames_curr = getattr(metrics, 'sampled_frames', [])
+                                for target in path_manager.targets:
+                                    if target.system_name == system_name_curr:
+                                        target.sampled_frames = sampled_frames_curr
+                                        break
+                            
                             ResultSaver.save_single_system(
                                 output_dir=self.current_output_dir,
                                 result=result,
@@ -660,30 +680,27 @@ class AnalysisOrchestrator:
             progress_info = ResultSaver.load_progress(self.current_output_dir)
             processed_systems = set(progress_info.get('processed_systems', []))
             is_incremental = len(processed_systems) > 0 and not self.config.force_recompute
-            
             if is_incremental:
                 self.logger.info(f"检测到已有进度（{len(processed_systems)} 个已处理系统），启用增量保存模式")
             else:
                 self.logger.info("全新分析或强制重新计算，使用完整保存模式")
-            
             ResultSaver.save_results(self.current_output_dir, analysis_results, incremental=is_incremental)
-            path_manager.load_sampled_frames_from_csv()
+            # 强制同步采样帧到PathManager.targets，确保analysis_targets.json包含采样信息
+            path_manager.update_sampled_frames_from_results(analysis_results)
+            try:
+                current_analysis_params = {
+                    'sample_ratio': self.config.sample_ratio,
+                    'power_p': self.config.power_p,
+                    'pca_variance_ratio': self.config.pca_variance_ratio
+                }
+                path_manager.save_analysis_targets(current_analysis_params)
+            except Exception as e:
+                self.logger.warning(f"保存analysis_targets.json时出错: {e}")
     
     def _save_sampling_only_results(self, analysis_results: List[tuple], path_manager: PathManager) -> None:
         """仅采样模式：同步采样帧到PathManager.targets，并保存analysis_targets.json，不再生成sampling_summary.json"""
-        # 建立 system_name -> sampled_frames 的映射
-        sampled_frames_map = {}
-        for result in analysis_results:
-            if len(result) >= 2:
-                metrics = result[0]
-                system_name = getattr(metrics, 'system_name', 'unknown')
-                sampled_frames = getattr(metrics, 'sampled_frames', [])
-                sampled_frames_map[system_name] = sampled_frames
-
-        # 同步采样帧到PathManager.targets
-        for target in path_manager.targets:
-            if target.system_name in sampled_frames_map:
-                target.sampled_frames = sampled_frames_map[target.system_name]
+        # 使用统一的同步方法
+        path_manager.update_sampled_frames_from_results(analysis_results)
 
         # 立即保存analysis_targets.json，确保采样帧写入
         try:

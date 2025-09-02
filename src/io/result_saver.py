@@ -29,7 +29,7 @@ class ResultSaver:
     # 分组顺序：
     # 1) 基础标识 & 条件 -> 2) 规模/维度 -> 3) 核心结构距离指标 -> 4) 多样性/覆盖/能量 ->
     # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性
-    # 注意：原第7组 Mean_Structure_Coordinates 已拆分为独立 JSON 文件导出，列中移除（PR1）。
+    # 注意：原第7组 Mean_Structure_Coordinates 已完全移除，不再输出（PR2）。
     # 统一来源：core.metrics.SYSTEM_SUMMARY_HEADERS
     SYSTEM_SUMMARY_HEADERS = REGISTRY_SYSTEM_SUMMARY_HEADERS
     SYSTEM_SUMMARY_SCHEMA_VERSION = SUMMARY_SCHEMA_VERSION
@@ -60,90 +60,6 @@ class ResultSaver:
         return build_registry_summary_row(metrics)
 
     @staticmethod
-    def export_mean_structure(output_dir: str, metrics: TrajectoryMetrics, force_update: bool = False) -> None:
-        """导出单体系平均结构到独立 JSON 文件。
-
-        输出路径: <run_dir>/mean_structures/mean_structure_<system>.json
-        内容包含: 版本号, 导出时间, 系统基础信息, frame 统计, 维度, 均值结构 shape, 实际坐标数据。
-        若均值结构为空/None 则跳过。
-        
-        Args:
-            force_update: 如果为True，强制更新已存在的文件
-        """
-        logger = logging.getLogger(__name__)
-        try:
-            if metrics.mean_structure is None or getattr(metrics.mean_structure, 'size', 0) == 0:
-                return
-                
-            import json
-            mean_dir = os.path.join(output_dir, 'mean_structures')
-            FileUtils.ensure_dir(mean_dir)
-            filepath = os.path.join(mean_dir, f"mean_structure_{metrics.system_name}.json")
-            
-            # 检查文件是否已存在且无需强制更新
-            if not force_update and os.path.exists(filepath):
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        existing_data = json.load(f)
-                        # 如果文件已存在且版本相同，跳过更新
-                        if existing_data.get('version') == '1.0' and existing_data.get('num_frames') == metrics.num_frames:
-                            logger.debug(f"均值结构文件已存在且最新: {metrics.system_name}")
-                            return
-                except Exception:
-                    # 如果读取失败，继续写入
-                    pass
-            
-            data = {
-                "version": "1.0",  # PR1 初始版本
-                "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
-                "system": metrics.system_name,
-                "molecule_id": metrics.mol_id,
-                "configuration": metrics.conf,
-                "temperature_K": metrics.temperature,
-                "num_frames": metrics.num_frames,
-                "dimension": metrics.dimension,
-                "mean_structure_shape": list(metrics.mean_structure.shape),
-                "mean_structure": metrics.mean_structure.tolist(),
-                # 新增RMSD缓存支持（续算复用）
-                "rmsd_mean": metrics.rmsd_mean,
-                "rmsd_per_frame": metrics.rmsd_per_frame,
-            }
-            # 原子级别字段扩展预留
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-
-            # 维护索引文件（追加/更新）
-            try:
-                index_path = os.path.join(mean_dir, 'index.json')
-                index = {}
-                if os.path.exists(index_path):
-                    try:
-                        with open(index_path, 'r', encoding='utf-8') as idx_f:
-                            index = json.load(idx_f) or {}
-                    except Exception:
-                        index = {}
-                index[metrics.system_name] = {
-                    "file": os.path.basename(filepath),
-                    "num_frames": metrics.num_frames,
-                    "dimension": metrics.dimension,
-                    "shape": list(metrics.mean_structure.shape),
-                    "updated_at": data["exported_at"],
-                }
-                with open(index_path, 'w', encoding='utf-8') as idx_f:
-                    json.dump(index, idx_f, ensure_ascii=False, indent=2)
-                    idx_f.flush()
-                    os.fsync(idx_f.fileno())
-            except Exception as ie:
-                logger.warning(f"更新均值结构索引失败: {ie}")
-                
-            logger.debug(f"成功导出均值结构: {metrics.system_name}")
-            
-        except Exception as e:
-            logger.warning(f"导出均值结构失败: {metrics.system_name}: {e}")
-
-    @staticmethod
     def save_results(output_dir: str, analysis_results: List[Tuple]) -> None:
         """(兼容接口) 使用流式逻辑逐体系保存；不再区分增量/完整模式。"""
         logger = logging.getLogger(__name__)
@@ -169,8 +85,8 @@ class ResultSaver:
         """流式保存单个体系的全部可用结果 (体系完成后立即调用)。
 
         按当前模式与可用数据自动降级：
-          - 完整模式(result 长度>=7)：写 frame_metrics, append system_metrics_summary, mean_structure
-          - 仅采样模式/数据不足：只尝试导出均值结构(如果存在) + 采样帧（采样帧主要已在 analysis_targets.json 由调用方刷新）
+          - 完整模式(result 长度>=7)：写 frame_metrics, append system_metrics_summary
+          - 仅采样模式/数据不足：只写采样帧信息（采样帧主要已在 analysis_targets.json 由调用方刷新）
 
         Args:
             output_dir: run_* 目录
@@ -192,13 +108,9 @@ class ResultSaver:
             # 1) system_metrics_summary.csv 追加写（仅完整模式且有足够数据）
             if not sampling_only and hasattr(metrics, 'system_name'):
                 ResultSaver.append_system_summary_rows(output_dir, [metrics])
-                ResultSaver.export_mean_structure(output_dir, metrics, force_update=True)
             elif sampling_only:
-                # 采样模式：仍尝试导出均值结构（如果 earlier pipeline 填充）
-                try:
-                    ResultSaver.export_mean_structure(output_dir, metrics, force_update=True)
-                except Exception:
-                    pass
+                # 采样模式：不再导出均值结构
+                pass
 
             # 2) frame_metrics_{system}.csv (仅完整模式)
             if (not sampling_only) and frames and pca_components_data is not None:
