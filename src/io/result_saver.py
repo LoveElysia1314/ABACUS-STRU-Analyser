@@ -11,7 +11,7 @@ import numpy as np
 from ..core.metrics import TrajectoryMetrics
 from ..io.stru_parser import FrameData
 from ..utils import FileUtils
-from ..utils.data_utils import ErrorHandler
+from ..utils.common import ErrorHandler
 from ..core.metrics import (
     SYSTEM_SUMMARY_HEADERS as REGISTRY_SYSTEM_SUMMARY_HEADERS,
     build_summary_row as build_registry_summary_row,

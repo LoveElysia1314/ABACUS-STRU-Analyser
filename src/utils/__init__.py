@@ -15,8 +15,8 @@ For backward compatibility, commonly used classes are re-exported at package lev
 from .logmanager import LoggerManager, create_standard_logger
 
 # Legacy imports for backward compatibility
-from .data_utils import DataUtils, MathUtils, ValidationUtils
-from .file_utils import FileUtils
+from .common import DataUtils, MathUtils, ValidationUtils
+from .common import FileUtils
 
 # Re-export commonly used classes at package level
 __all__ = [
@@ -28,10 +28,9 @@ __all__ = [
     # Logging classes
     "LoggerManager",
     "create_standard_logger",
-    # Constants (if needed)
+    # Constants and legacy classes
     "Constants",
-    # Mean structure manager
-    "MeanStructureManager",
+    "DirectoryDiscovery",
 ]
 
 

@@ -10,8 +10,8 @@ from ..utils.logmanager import LoggerManager
 from ..io.path_manager import PathManager
 from .system_analyser import SystemAnalyser, BatchAnalyser
 from ..io.result_saver import ResultSaver
-from ..utils.data_utils import ErrorHandler
-from ..utils.file_utils import FileUtils
+from ..utils.common import ErrorHandler
+from ..utils.common import FileUtils
 from ..analysis.correlation_analyser import CorrelationAnalyser
 
 

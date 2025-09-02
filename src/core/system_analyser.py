@@ -20,7 +20,7 @@ from ..io.stru_parser import StrUParser
 from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics
 from .sampler import PowerMeanSampler
-from ..utils.data_utils import ErrorHandler
+from ..utils.common import ErrorHandler
 from .metrics import MetricsToolkit  # Level 4 adapters
 
 
