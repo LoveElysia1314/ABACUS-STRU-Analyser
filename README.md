@@ -46,6 +46,19 @@ ABACUS-STRU-Analyser is a high-throughput analysis pipeline for ABACUS MD trajec
 
 ---
 
+## 📊 重构进度 | Refactoring Progress
+
+**当前状态**: 66.7% 完成 (4/6阶段)
+- ✅ **已完成**: 阶段0-3 (日志管理、RMSD合并、metrics合并、采样相关合并)
+- 🔄 **进行中**: 无
+- ⏳ **待完成**: 阶段4-5 (IO合并、通用工具合并)
+
+**最新更新**: 阶段3已完成 - 将math_utils.py合并到sampler.py，文件数量从19个减少到18个
+
+详细进度请查看: [`REFACTORING_PROGRESS.md`](REFACTORING_PROGRESS.md)
+
+---
+
 ## 主要特性 | Key Features
 
 - ⚡ **构象向量化 / Conformation Vectorization**：基于非氢原子对距离，PCA降维，自动忽略旋转/平移/缩放。
