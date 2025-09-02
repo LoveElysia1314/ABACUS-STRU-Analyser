@@ -99,7 +99,7 @@ python main_correlation_analyser.py
 
 ```
 analysis_results/
-└── run_r0.05_p-0.5_v0.9/
+└── run_r0.1_p-0.5_v0.9/
     ├── analysis_targets.json
     ├── combined_analysis_results/
     │   ├── system_metrics_summary.csv
@@ -173,7 +173,7 @@ python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -w 4
 # 2. 相关性分析 / Correlation analysis
 python main_correlation_analyser.py
 # 3. 查看结果 / Check results
-ls analysis_results/run_r0.05_p-0.5_v0.9/
+ls analysis_results/run_r0.1_p-0.5_v0.9/
 ```
 
 ### 高级用法 / Advanced Usage
@@ -206,7 +206,7 @@ python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -f
 # 采样方法对比分析 / Compare sampling methods
 python sampling_compare_demo.py
 # 指定结果目录 / Specify result dir
-python sampling_compare_demo.py --result_dir /path/to/analysis_results/run_r0.05_p-0.5_v0.9
+python sampling_compare_demo.py --result_dir /path/to/analysis_results/run_r0.1_p-0.5_v0.9
 ```
 
 ---

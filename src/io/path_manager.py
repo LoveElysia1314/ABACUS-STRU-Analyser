@@ -24,6 +24,7 @@ class AnalysisTarget:
     source_hash: str = ""  # 源文件哈希，用于检测源数据变更
     sampled_frames: List[int] = None  # 采样帧编号列表
     reuse_sampling: bool = False  # 是否复用既有采样结果（跳过采样算法）
+    md_dumpfreq: int = 1  # MD dump frequency from INPUT file
 
     def __post_init__(self):
         if self.sampled_frames is None:
@@ -55,7 +56,7 @@ class PathManager:
         """计算分析参数的哈希值，只包含影响计算结果的参数"""
         try:
             key_params = {
-                "sample_ratio": params.get("sample_ratio", 0.05),
+                "sample_ratio": params.get("sample_ratio", 0.1),
                 "power_p": params.get("power_p", -0.5),
                 "pca_variance_ratio": params.get("pca_variance_ratio", 0.90),
             }
@@ -115,7 +116,7 @@ class PathManager:
         # 生成基于参数的目录名（简洁版）
         # include_h 固定为 False，不作为目录命名的一部分
         key_params = {
-            "sample_ratio": analysis_params.get("sample_ratio", 0.05),
+            "sample_ratio": analysis_params.get("sample_ratio", 0.1),
             "power_p": analysis_params.get("power_p", -0.5),
             "pca_variance_ratio": analysis_params.get("pca_variance_ratio", 0.90),
         }
@@ -235,6 +236,27 @@ class PathManager:
                 if not stru_files:
                     self.logger.warning(f"系统 {basename} 没有找到 STRU_MD 文件")
                     continue
+                # --- 新增: 基于 INPUT 中 md_dumpfreq 选择帧 ---
+                md_dumpfreq = 1  # 默认值
+                try:
+                    from .stru_parser import StrUParser
+
+                    parser = StrUParser()
+                    input_file = os.path.join(system_path, "OUT.ABACUS", "INPUT")
+                    md_dumpfreq = parser.parse_md_dumpfreq(input_file)
+                    original_count = len(stru_files)
+                    stru_files = parser.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
+                    if not stru_files:
+                        self.logger.warning(
+                            f"系统 {basename} 依据 md_dumpfreq={md_dumpfreq} 过滤后无可用帧 (原始 {original_count} 帧)"
+                        )
+                        continue
+                    if len(stru_files) != original_count:
+                        self.logger.info(
+                            f"系统 {basename}: 按 md_dumpfreq={md_dumpfreq} 筛选 {len(stru_files)}/{original_count} 帧 (包含0帧)"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"系统 {basename} 应用 md_dumpfreq 筛选失败，使用所有帧: {e}")
                 try:
                     creation_time = os.path.getctime(system_path)
                 except OSError:
@@ -251,6 +273,7 @@ class PathManager:
                     stru_files=stru_files,
                     creation_time=creation_time,
                     source_hash=source_hash,
+                    md_dumpfreq=md_dumpfreq,
                 )
                 self.targets.append(target)
                 targets_for_mol.append(target)
@@ -356,6 +379,19 @@ class PathManager:
             if analysis_params:
                 params_hash = self._calculate_params_hash(analysis_params)
 
+            # 统计全局md_dumpfreq（如有多个体系，取最大值/最小值/列表？此处取所有target的md_dumpfreq，若无则为None）
+            md_dumpfreqs = [getattr(t, 'md_dumpfreq', None) for t in self.targets]
+            # 只保留有效int
+            md_dumpfreqs = [v for v in md_dumpfreqs if isinstance(v, int) and v > 0]
+            # 若所有体系md_dumpfreq一致，则写单值，否则写列表
+            if md_dumpfreqs:
+                if all(v == md_dumpfreqs[0] for v in md_dumpfreqs):
+                    md_dumpfreq_meta = md_dumpfreqs[0]
+                else:
+                    md_dumpfreq_meta = md_dumpfreqs
+            else:
+                md_dumpfreq_meta = None
+
             # 生成JSON结构
             analysis_data = {
                 "metadata": {
@@ -365,6 +401,7 @@ class PathManager:
                     "params_hash": params_hash,
                     "analysis_params": analysis_params or {},
                     "output_directory": self.output_dir,
+                    "md_dumpfreq": md_dumpfreq_meta,
                 },
                 "summary": {
                     "total_molecules": len(self.mol_groups),
@@ -493,6 +530,7 @@ class PathManager:
                         creation_time=system_data.get("creation_time", 0.0),
                         source_hash=system_data.get("source_hash", ""),
                         sampled_frames=sampled_frames_data,
+                        md_dumpfreq=system_data.get("md_dumpfreq", 1),  # 从JSON中读取或使用默认值
                     )
                     self.targets.append(target)
                     targets_for_mol.append(target)

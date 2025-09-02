@@ -324,7 +324,7 @@ class MainApp:
     def _parse_arguments(self) -> argparse.Namespace:
         """解析命令行参数"""
         parser = argparse.ArgumentParser(description='ABACUS STRU轨迹主分析器')
-        parser.add_argument('-r', '--sample_ratio', type=float, default=0.05, help='采样比例')
+        parser.add_argument('-r', '--sample_ratio', type=float, default=0.1, help='采样比例')
         parser.add_argument('-p', '--power_p', type=float, default=-0.5, help='幂平均距离的p值')
         parser.add_argument('-v', '--pca_variance_ratio', type=float, default=0.90, help='PCA降维累计方差贡献率 (0~1, 默认: 0.90)')
         parser.add_argument('-w', '--workers', type=int, default=-1, help='并行工作进程数')

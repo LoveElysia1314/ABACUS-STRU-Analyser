@@ -20,8 +20,8 @@ def _dir_non_empty(path: str) -> bool:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="根据analysis_targets.json采样帧导出deepmd数据集并可拆分")
-    parser.add_argument('--run_dir', type=str, default='analysis_results/run_r0.05_p-0.5_v0.9', help='分析结果目录，包含analysis_targets.json')
-    parser.add_argument('--output_dir', type=str, default='analysis_results/run_r0.05_p-0.5_v0.9/deepmd_npy', help='输出deepmd npy目录')
+    parser.add_argument('--run_dir', type=str, default='analysis_results/run_r0.1_p-0.5_v0.9', help='分析结果目录，包含analysis_targets.json')
+    parser.add_argument('--output_dir', type=str, default='analysis_results/run_r0.1_p-0.5_v0.9/deepmd_npy', help='输出deepmd npy目录')
     parser.add_argument('--split_ratio', type=float, nargs='+', default=[0.8, 0.2], help='拆分比例，如0.8 0.2')
     parser.add_argument('--force', action='store_true', help='强制重新导出（忽略已有目录内容）')
     parser.add_argument('--seed', type=int, default=42, help='随机拆分种子，保证可复现')

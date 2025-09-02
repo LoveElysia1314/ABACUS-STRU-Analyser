@@ -26,6 +26,74 @@ class StrUParser:
         self.exclude_hydrogen = exclude_hydrogen
         self.logger = logging.getLogger(__name__)
 
+    def parse_md_dumpfreq(self, input_file: str) -> int:
+        """Parse md_dumpfreq value from an ABACUS INPUT file.
+
+        Args:
+            input_file: Absolute path to INPUT file.
+        Returns:
+            int: md_dumpfreq (>=1). Default 1 if missing / invalid / file not found.
+        """
+        freq = 1
+        try:
+            if not os.path.isfile(input_file):
+                return freq
+            with open(input_file, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    # Strip inline comments after '#'
+                    raw = line.strip()
+                    if not raw or raw.startswith('#'):
+                        continue
+                    if raw.lower().startswith('md_dumpfreq'):
+                        # Split and take the first numeric token after the key
+                        parts = raw.split()
+                        if len(parts) >= 2:
+                            try:
+                                val = int(float(parts[1]))  # tolerate "10" or "10.0"
+                                if val >= 1:
+                                    freq = val
+                            except ValueError:
+                                pass
+                        break
+        except Exception:
+            # Silently fall back to default (1)
+            return 1
+        return freq
+
+    def select_frames_by_md_dumpfreq(self, stru_files, md_dumpfreq: int):
+        """Filter STRU_MD_* file list according to md_dumpfreq, including frame 0.
+
+        Rule: select frames with indices i = md_dumpfreq * k, k=0,1,2,...
+        That is: all multiples of md_dumpfreq, including 0.
+
+        Args:
+            stru_files (List[str]): Full list of STRU_MD_* file paths.
+            md_dumpfreq (int): Dump frequency (>=1).
+        Returns:
+            List[str]: Filtered list, sorted by frame index.
+        """
+        if md_dumpfreq <= 1:
+            # No downsampling needed (frequency 1 => every step dumped)
+            return sorted(stru_files, key=self._frame_id_from_path)
+        filtered = []
+        for f in stru_files:
+            fid = self._frame_id_from_path(f)
+            if fid is None:
+                continue
+            if fid % md_dumpfreq == 0:
+                filtered.append(f)
+        return sorted(filtered, key=self._frame_id_from_path)
+
+    def _frame_id_from_path(self, path: str) -> Optional[int]:
+        name = os.path.basename(path)
+        m = re.search(r"STRU_MD_(\d+)$", name)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+
     def parse_file(self, stru_file: str) -> Optional[Tuple[np.ndarray, List[str]]]:
         try:
             with open(stru_file, encoding="utf-8") as f:
@@ -137,6 +205,23 @@ class StrUParser:
         if not stru_files:
             self.logger.warning(f"No STRU_MD_* files in {stru_dir}")
             return []
+        # 基于 INPUT 中的 md_dumpfreq 进行筛选，保持与 PathManager 一致
+        try:
+            input_file = os.path.abspath(os.path.join(stru_dir, os.pardir, "INPUT"))
+            md_dumpfreq = self.parse_md_dumpfreq(input_file)
+            original = len(stru_files)
+            stru_files = self.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
+            if not stru_files:
+                self.logger.warning(
+                    f"After applying md_dumpfreq={md_dumpfreq} filter, no STRU frames remain in {stru_dir} (original {original})"
+                )
+                return []
+            if len(stru_files) != original:
+                self.logger.info(
+                    f"Filtered STRU frames by md_dumpfreq={md_dumpfreq}: {len(stru_files)}/{original} retained (including 0)"
+                )
+        except Exception as e:
+            self.logger.warning(f"Failed to apply md_dumpfreq filtering, using all frames: {e}")
         frames = []
         for stru_file in stru_files:
             match = re.search(r"STRU_MD_(\d+)", os.path.basename(stru_file))

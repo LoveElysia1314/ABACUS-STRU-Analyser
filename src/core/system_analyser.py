@@ -137,7 +137,7 @@ class SystemAnalyser:
     def __init__(
         self,
         include_hydrogen: bool = False,
-        sample_ratio: float = 0.05,
+    sample_ratio: float = 0.1,
         power_p: float = 0.5,
     pca_variance_ratio: float = 0.90,
     ):
