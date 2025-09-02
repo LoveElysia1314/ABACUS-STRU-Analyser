@@ -12,7 +12,7 @@ import argparse
 import json
 import dpdata
 import numpy as np
-from src.logmanager import create_standard_logger
+from ..utils.logmanager import create_standard_logger
 
 
 def _dir_non_empty(path: str) -> bool:

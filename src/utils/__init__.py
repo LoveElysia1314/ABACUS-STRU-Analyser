@@ -12,7 +12,7 @@ For backward compatibility, commonly used classes are re-exported at package lev
 
 # Import from new modular structure
 # Import logging utilities from dedicated package
-from ..logmanager import LoggerManager, create_standard_logger
+from .logmanager import LoggerManager, create_standard_logger
 
 # Legacy imports for backward compatibility
 from .data_utils import DataUtils, MathUtils, ValidationUtils

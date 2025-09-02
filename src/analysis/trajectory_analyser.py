@@ -54,12 +54,11 @@ from scipy.spatial.distance import cdist, pdist
 
 # Level 3: 引入结构指标统一模块（供外部使用）
 try:  # 软依赖，避免循环导入风险
-    from ..utils.structural_metrics import (
-        kabsch_align,
-        iterative_mean_structure,
-        compute_rmsd_series as calculate_rmsd_series,
-        compute_rmsf,
-    )
+    from ..core.system_analyser import RMSDCalculator
+    kabsch_align = RMSDCalculator.kabsch_align
+    iterative_mean_structure = RMSDCalculator.iterative_mean_structure
+    calculate_rmsd_series = RMSDCalculator.compute_rmsd_series
+    compute_rmsf = RMSDCalculator.compute_rmsf
 except Exception:  # noqa: BLE001 - 宽松捕获，仅降级功能
     kabsch_align = None  # type: ignore
     iterative_mean_structure = None  # type: ignore
@@ -145,5 +144,5 @@ class SummaryInfo:
 
 
 # --- 核心分析逻辑 ---
-# 说明：RMSD/RMSF/Kabsch/迭代均值结构函数已迁移至 utils.structural_metrics
+# 说明：RMSD/RMSF/Kabsch/迭代均值结构函数已迁移至 core.system_analyser.RMSDCalculator
 # 保留兼容导入（文件顶部的 try 导入），避免重复实现。

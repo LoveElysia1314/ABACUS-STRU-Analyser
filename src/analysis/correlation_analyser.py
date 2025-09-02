@@ -60,7 +60,7 @@ from ..utils import (
     MathUtils,
     ValidationUtils,
 )
-from ..utils.metrics_registry import (
+from ..core.metrics import (
     SYSTEM_SUMMARY_HEADERS as SUMMARY_HEADERS,
     HEADER_TO_SPEC,
     get_headers_by_categories,

@@ -12,7 +12,7 @@ from ..core.metrics import TrajectoryMetrics
 from ..io.stru_parser import FrameData
 from ..utils import FileUtils
 from ..utils.data_utils import ErrorHandler
-from ..utils.metrics_registry import (
+from ..core.metrics import (
     SYSTEM_SUMMARY_HEADERS as REGISTRY_SYSTEM_SUMMARY_HEADERS,
     build_summary_row as build_registry_summary_row,
     SCHEMA_VERSION as SUMMARY_SCHEMA_VERSION,
@@ -28,7 +28,7 @@ class ResultSaver:
     # 1) 基础标识 & 条件 -> 2) 规模/维度 -> 3) 核心结构距离指标 -> 4) 多样性/覆盖/能量 ->
     # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性
     # 注意：原第7组 Mean_Structure_Coordinates 已拆分为独立 JSON 文件导出，列中移除（PR1）。
-    # 统一来源：metrics_registry.SYSTEM_SUMMARY_HEADERS
+    # 统一来源：core.metrics.SYSTEM_SUMMARY_HEADERS
     SYSTEM_SUMMARY_HEADERS = REGISTRY_SYSTEM_SUMMARY_HEADERS
     SYSTEM_SUMMARY_SCHEMA_VERSION = SUMMARY_SCHEMA_VERSION
 

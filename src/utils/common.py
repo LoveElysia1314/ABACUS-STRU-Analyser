@@ -53,29 +53,6 @@ class CommonUtils:
         return float(np.nanstd(values_array, ddof=ddof))
 
 
-class LoggingUtils:
-    """Utilities for logging and error handling."""
-
-    @staticmethod
-    def setup_basic_logging(level: int = logging.INFO, log_file: Optional[str] = None):
-        """Setup basic logging configuration."""
-        logging.basicConfig(
-            level=level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler(),
-                *(logging.FileHandler(log_file) for _ in [log_file] if log_file)
-            ]
-        )
-
-    @staticmethod
-    def log_exception(logger: logging.Logger, exception: Exception, context: str = ""):
-        """Log exception with full traceback."""
-        error_msg = f"{context}: {str(exception)}" if context else str(exception)
-        logger.error(error_msg)
-        logger.error(f"Traceback: {traceback.format_exc()}")
-
-
 # Re-exports for backward compatibility
 ensure_directory = CommonUtils.ensure_directory
 get_project_root = CommonUtils.get_project_root

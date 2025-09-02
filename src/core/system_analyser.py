@@ -7,38 +7,88 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-# Level 3: 统一结构指标工具导入（兼容旧RMSDCalculator）
-try:
-    from ..utils.structural_metrics import (
-        kabsch_align as _sm_kabsch_align,
-        compute_rmsd_series as _sm_compute_rmsd_series,
-        iterative_mean_structure as _sm_iter_mean_struct,
-    )
-except Exception:  # 若失败则保持旧实现
-    _sm_kabsch_align = None
-    _sm_compute_rmsd_series = None
-    _sm_iter_mean_struct = None
+#!/usr/bin/env python
+
+import logging
+import os
+import re
+from typing import List, Optional, Tuple
+
+import numpy as np
 
 from ..io.stru_parser import StrUParser
 from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics
 from .sampler import PowerMeanSampler
 from ..utils.data_utils import ErrorHandler
-from ..utils.metrics_utils import MetricsToolkit, compute_distribution_similarity  # Level 4 adapters
+from .metrics import MetricsToolkit, compute_distribution_similarity  # Level 4 adapters
 
 
-class RMSDCalculator:  # 兼容层：完全委托到 utils.structural_metrics
-    """兼容层：委托到 utils.structural_metrics，避免重复实现。"""
+class RMSDCalculator:
+    """RMSD计算和结构对齐工具类"""
 
     @staticmethod
-    def kabsch_align(mobile: np.ndarray, target: np.ndarray) -> np.ndarray:
-        """直接使用统一的 kabsch_align 实现"""
-        if _sm_kabsch_align is not None:
-            return _sm_kabsch_align(mobile, target)
-        # 回退：最简实现（不做旋转，仅中心对齐）
-        mobile = np.array(mobile, dtype=float)
-        target = np.array(target, dtype=float)
-        return mobile - mobile.mean(axis=0)
+    def kabsch_align(P: np.ndarray, Q: np.ndarray) -> np.ndarray:
+        """Align coordinates P onto Q using Kabsch algorithm.
+
+        Args:
+            P: (n_atoms, 3)
+            Q: (n_atoms, 3)
+        Returns:
+            Aligned copy of P.
+        """
+        if P.size == 0 or Q.size == 0:
+            return P.copy()
+        Pc = P - P.mean(axis=0)
+        Qc = Q - Q.mean(axis=0)
+        C = Pc.T @ Qc
+        V, S, Wt = np.linalg.svd(C)
+        d = np.sign(np.linalg.det(V @ Wt))
+        U = V @ np.diag([1, 1, d]) @ Wt
+        return Pc @ U
+
+    @staticmethod
+    def iterative_mean_structure(positions_list: List[np.ndarray], max_iter: int = 20, tol: float = 1e-6) -> Tuple[np.ndarray, List[np.ndarray]]:
+        """Iteratively align frames to a reference and recompute mean structure.
+
+        Returns mean structure and list of aligned frames.
+        """
+        if not positions_list:
+            return np.array([]), []
+        ref = positions_list[0].copy()
+        aligned_positions = list(positions_list)
+        for _ in range(max_iter):
+            aligned_positions = [RMSDCalculator.kabsch_align(pos, ref) for pos in positions_list]
+            mean_structure = np.mean(aligned_positions, axis=0)
+            if np.linalg.norm(mean_structure - ref) < tol:
+                break
+            ref = mean_structure
+        return mean_structure, aligned_positions
+
+    @staticmethod
+    def compute_rmsd_series(positions_list: List[np.ndarray], reference: np.ndarray | None = None) -> np.ndarray:
+        """Compute per-frame RMSD to reference (default: iterative mean)."""
+        if not positions_list:
+            return np.array([])
+        if reference is None:
+            reference = np.mean(np.stack(positions_list, axis=0), axis=0)
+        rmsds = []
+        for pos in positions_list:
+            diff = pos - reference
+            rmsd = np.sqrt(np.mean(np.sum(diff * diff, axis=1)))
+            rmsds.append(rmsd)
+        return np.array(rmsds, dtype=float)
+
+    @staticmethod
+    def compute_rmsf(positions_list: List[np.ndarray]) -> np.ndarray:
+        """Compute per-atom RMSF over trajectory."""
+        if not positions_list:
+            return np.array([])
+        arr = np.stack(positions_list, axis=0)
+        mean_pos = np.mean(arr, axis=0)
+        diff = arr - mean_pos
+        rmsf = np.sqrt(np.mean(np.sum(diff * diff, axis=2), axis=0))
+        return rmsf
 
     @staticmethod
     def calculate_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
@@ -48,30 +98,22 @@ class RMSDCalculator:  # 兼容层：完全委托到 utils.structural_metrics
 
     @staticmethod
     def iterative_alignment(frames: List, max_iterations: int = 10, tolerance: float = 1e-5) -> Tuple[np.ndarray, List[float]]:
-        """使用统一的迭代对齐算法"""
+        """使用迭代对齐算法"""
         if not frames:
             return np.array([]), []
 
-        if _sm_iter_mean_struct is not None:
-            # 使用统一实现
-            pos_list = [f.positions.copy() for f in frames]
-            mean_struct, aligned_list = _sm_iter_mean_struct(pos_list, max_iter=max_iterations, tol=tolerance)
-            if aligned_list:
-                # 使用统一的 RMSD 计算
-                rmsds = []
-                for aligned_pos in aligned_list:
-                    rmsd = RMSDCalculator.calculate_rmsd(aligned_pos, mean_struct)
-                    rmsds.append(rmsd)
-            else:
-                rmsds = []
-            return mean_struct, rmsds
+        # 使用统一实现
+        pos_list = [f.positions.copy() for f in frames]
+        mean_struct, aligned_list = RMSDCalculator.iterative_mean_structure(pos_list, max_iter=max_iterations, tol=tolerance)
+        if aligned_list:
+            # 计算RMSD
+            rmsds = []
+            for aligned_pos in aligned_list:
+                rmsd = RMSDCalculator.calculate_rmsd(aligned_pos, mean_struct)
+                rmsds.append(rmsd)
         else:
-            # 回退到旧逻辑（简化）
-            ref_coords = frames[0].positions.copy()
-            all_coords = [frame.positions.copy() for frame in frames]
-            aligned = [coords - coords.mean(axis=0) for coords in all_coords]
-            rmsds = [RMSDCalculator.calculate_rmsd(a, ref_coords) for a in aligned]
-            return ref_coords, rmsds
+            rmsds = []
+        return mean_struct, rmsds
 
 
 class PCAReducer:

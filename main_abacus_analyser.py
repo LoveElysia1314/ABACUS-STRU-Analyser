@@ -17,7 +17,7 @@ from typing import List, Dict, Optional
 
 # 导入自定义模块
 from src.utils import DirectoryDiscovery
-from src.logmanager import LoggerManager
+from src.utils.logmanager import LoggerManager
 from src.io.path_manager import PathManager
 from src.core.system_analyser import SystemAnalyser, BatchAnalyser
 from src.io.result_saver import ResultSaver
@@ -66,7 +66,7 @@ def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float,
 
     # Setup multiprocess logging for worker
     if log_queue is not None:
-        from src.logmanager import LoggerManager
+        from src.utils.logmanager import LoggerManager
         worker_logger = LoggerManager.setup_worker_logger(
             name="WorkerProcess",
             queue=log_queue,

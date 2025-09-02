@@ -13,9 +13,9 @@ from glob import glob
 import warnings
 
 from src.utils import LoggerManager
-from src.utils.metrics_utils import adapt_sampling_metrics, collect_metric_values
+from src.core.metrics import MetricsToolkit, adapt_sampling_metrics, collect_metric_values
 from src.utils.math_utils import uniform_sample_indices, calc_improvement, calc_significance
-from src.utils.metrics_registry import get_headers_by_categories
+from src.core.metrics import get_headers_by_categories
 
 warnings.filterwarnings('ignore')
 logger = LoggerManager.create_logger(__name__)

@@ -6,7 +6,7 @@ import time
 import logging
 from typing import List, Dict, Optional
 
-from ..logmanager import LoggerManager
+from ..utils.logmanager import LoggerManager
 from ..io.path_manager import PathManager
 from .system_analyser import SystemAnalyser, BatchAnalyser
 from ..io.result_saver import ResultSaver
