@@ -335,6 +335,81 @@ class SystemAnalyser:
                 metrics.set_sampled_metrics(original_metrics)
         return metrics, frames, swap_count, improve_ratio, pca_components_data, pca_model, metrics.rmsd_per_frame
 
+    def analyse_system_sampling_only(self, system_dir: str, pre_sampled_frames: Optional[List[int]] = None) -> Optional[Tuple]:
+        """仅执行采样算法的轻量级分析版本，不计算各项统计指标"""
+        system_info = self._extract_system_info(system_dir)
+        if not system_info:
+            return None
+        system_name, mol_id, conf, temperature = system_info
+        stru_dir = os.path.join(system_dir, "OUT.ABACUS", "STRU")
+        if not os.path.exists(stru_dir):
+            self.logger.warning(f"STRU目录不存在: {stru_dir}")
+            return None
+        
+        frames = self.parser.parse_trajectory(stru_dir)
+        if ValidationUtils.is_empty(frames):
+            self.logger.warning(f"未找到有效轨迹数据: {system_dir}")
+            return None
+            
+        # 创建简化的metrics对象，只包含基本信息
+        metrics = TrajectoryMetrics(system_name, mol_id, conf, temperature, system_dir)
+        metrics.num_frames = len(frames)
+        
+        # 计算距离向量用于采样
+        distance_vectors = []
+        for frame in frames:
+            dist_vec = MetricCalculator.calculate_distance_vectors(frame.positions)
+            if ValidationUtils.is_empty(dist_vec):
+                continue
+            distance_vectors.append(dist_vec)
+            frame.distance_vector = dist_vec
+            
+        if ValidationUtils.is_empty(distance_vectors):
+            self.logger.warning(f"无法计算距离向量: {system_dir}")
+            return None
+            
+        min_dim = min(len(vec) for vec in distance_vectors)
+        vector_matrix = [
+            vec[:min_dim]
+            for vec in distance_vectors
+            if not ValidationUtils.is_empty(vec) and len(vec) >= min_dim
+        ]
+        if ValidationUtils.is_empty(vector_matrix):
+            self.logger.warning(f"距离向量维度不一致: {system_dir}")
+            return None
+
+        vector_matrix = np.array(vector_matrix)
+        
+        # 应用PCA降维（用于采样）
+        reduced_matrix, pca_model = self.pca_reducer.apply_pca_reduction(vector_matrix)
+        
+        # 构建简化的综合向量（仅包含能量和PCA）
+        comprehensive_matrix = self.build_comprehensive_vectors(frames, reduced_matrix)
+        
+        # 执行采样
+        swap_count = 0
+        if pre_sampled_frames is not None and len(pre_sampled_frames) > 0:
+            # 复用采样结果
+            existing_ids = {f.frame_id: idx for idx, f in enumerate(frames)}
+            sampled_indices = [existing_ids[fid] for fid in pre_sampled_frames if fid in existing_ids]
+            if not sampled_indices:
+                pre_sampled_frames = None
+            else:
+                metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
+
+        if pre_sampled_frames is None:
+            k = max(2, int(round(self.sample_ratio * metrics.num_frames)))
+            if k < metrics.num_frames:
+                sampled_indices, swap_count, _ = PowerMeanSampler.select_frames(
+                    comprehensive_matrix, k, p=self.power_p
+                )
+                metrics.sampled_frames = [frames[i].frame_id for i in sampled_indices]
+            else:
+                metrics.sampled_frames = [f.frame_id for f in frames]
+        
+        # 返回简化的结果：只包含metrics和frames
+        return metrics, frames
+
     def build_comprehensive_vectors(self, frames: List, reduced_matrix: np.ndarray) -> np.ndarray:
         """构建包含能量和PCA分量的综合向量，并进行标准化和组间缩放"""
         comprehensive_vectors = []
