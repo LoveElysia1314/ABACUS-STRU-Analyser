@@ -21,7 +21,7 @@ from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics
 from .sampler import PowerMeanSampler
 from ..utils.data_utils import ErrorHandler
-from .metrics import MetricsToolkit, compute_distribution_similarity  # Level 4 adapters
+from .metrics import MetricsToolkit  # Level 4 adapters
 
 
 class RMSDCalculator:
@@ -309,7 +309,7 @@ class SystemAnalyser:
                 sampled_vectors = comprehensive_matrix[sampled_indices] if len(sampled_indices) > 0 else comprehensive_matrix
                 sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
                 try:
-                    sim = compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
+                    sim = MetricsToolkit.compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
                     metrics.set_distribution_similarity(sim)
                 except Exception:
                     pass
@@ -325,7 +325,7 @@ class SystemAnalyser:
                 sampled_vectors = comprehensive_matrix[sampled_indices]
                 sampled_metrics = MetricCalculator.compute_all_metrics(sampled_vectors)
                 try:
-                    sim = compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
+                    sim = MetricsToolkit.compute_distribution_similarity(sampled_vectors, comprehensive_matrix)
                     metrics.set_distribution_similarity(sim)
                 except Exception:
                     pass

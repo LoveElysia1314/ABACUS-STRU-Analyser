@@ -14,7 +14,7 @@ import warnings
 
 from src.utils import LoggerManager
 from src.core.metrics import MetricsToolkit, adapt_sampling_metrics, collect_metric_values
-from src.utils.math_utils import uniform_sample_indices, calc_improvement, calc_significance
+from src.core.sampler import SamplingStrategy, calculate_improvement, calculate_significance
 from src.core.metrics import get_headers_by_categories
 
 warnings.filterwarnings('ignore')
@@ -112,7 +112,7 @@ def _run_uniform_sampling_comparison(vectors, rmsd_data, k, n):
     if k == 0:
         return {}
 
-    idx_uniform = uniform_sample_indices(n, k)
+    idx_uniform = SamplingStrategy.uniform_sample_indices(n, k)
     return adapt_sampling_metrics(
         vectors[idx_uniform], vectors,
         rmsd_data[idx_uniform] if len(rmsd_data) > 0 else []
@@ -163,25 +163,25 @@ def _build_result_row(system, sample_ratio, n, k, sampled_metrics, rand_results,
         'RMSD_Mean_uniform': uniform_metrics.get('RMSD_Mean'),
 
         # 改进百分比
-        'ANND_improvement_pct': calc_improvement(
+        'ANND_improvement_pct': calculate_improvement(
             sampled_metrics.get('ANND'),
             np.mean(rand_ANND) if rand_ANND else np.nan
         ),
-        'RMSD_improvement_pct': calc_improvement(
+        'RMSD_improvement_pct': calculate_improvement(
             sampled_metrics.get('RMSD_Mean'),
             np.mean(rand_RMSD) if rand_RMSD else np.nan
         ),
 
         # 统计显著性
-        'ANND_p_value': calc_significance(sampled_metrics.get('ANND'), rand_ANND),
-        'RMSD_p_value': calc_significance(sampled_metrics.get('RMSD_Mean'), rand_RMSD),
+        'ANND_p_value': calculate_significance(sampled_metrics.get('ANND'), rand_ANND),
+        'RMSD_p_value': calculate_significance(sampled_metrics.get('RMSD_Mean'), rand_RMSD),
 
         # 相对于均匀采样的改进
-        'ANND_vs_uniform_pct': calc_improvement(
+        'ANND_vs_uniform_pct': calculate_improvement(
             sampled_metrics.get('ANND'),
             uniform_metrics.get('ANND')
         ),
-        'RMSD_vs_uniform_pct': calc_improvement(
+        'RMSD_vs_uniform_pct': calculate_improvement(
             sampled_metrics.get('RMSD_Mean'),
             uniform_metrics.get('RMSD_Mean')
         ),
