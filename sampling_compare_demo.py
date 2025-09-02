@@ -10,12 +10,15 @@ import logging
 import numpy as np
 import pandas as pd
 from glob import glob
+from typing import List
 import warnings
 
 from src.utils import LoggerManager
-from src.core.metrics import MetricsToolkit, adapt_sampling_metrics, collect_metric_values
+from src.core.metrics import MetricsToolkit
 from src.core.sampler import SamplingStrategy, calculate_improvement, calculate_significance
 from src.core.metrics import get_headers_by_categories
+from src.io.stru_parser import StrUParser
+from src.core.system_analyser import RMSDCalculator
 
 warnings.filterwarnings('ignore')
 logger = LoggerManager.create_logger(__name__)
@@ -31,6 +34,20 @@ def analyse_sampling_compare(result_dir=None):
             return
         result_dir = dirs[0]
 
+    # 加载系统路径映射
+    targets_file = os.path.join(result_dir, 'analysis_targets.json')
+    system_paths = {}
+    if os.path.exists(targets_file):
+        try:
+            import json
+            with open(targets_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for mol_data in data.get('molecules', {}).values():
+                    for sys_name, sys_data in mol_data.get('systems', {}).items():
+                        system_paths[sys_name] = sys_data.get('system_path', '')
+        except Exception as e:
+            logger.warning(f"加载系统路径映射失败: {e}")
+
     single_dir = os.path.join(result_dir, 'single_analysis_results')
     files = glob(os.path.join(single_dir, 'frame_metrics_*.csv'))
 
@@ -40,7 +57,7 @@ def analyse_sampling_compare(result_dir=None):
 
     rows = []
     for f in files:
-        row = _analyze_single_system(f)
+        row = _analyze_single_system(f, system_paths)
         if row:
             rows.append(row)
 
@@ -49,11 +66,12 @@ def analyse_sampling_compare(result_dir=None):
         _create_summary_table(rows, result_dir)
 
 
-def _analyze_single_system(file_path):
+def _analyze_single_system(file_path, system_paths):
     """分析单个系统的数据"""
     try:
         df = pd.read_csv(file_path)
         system = os.path.basename(file_path).replace('frame_metrics_', '').replace('.csv', '')
+        system_path = system_paths.get(system, '')
 
         # 准备数据
         vector_cols = [col for col in df.columns if (col == 'Energy_Standardized' or col.startswith('PC'))]
@@ -66,22 +84,32 @@ def _analyze_single_system(file_path):
         if k == 0 or n == 0:
             return None
 
-        # 准备RMSD数据
-        rmsd_data = []
-        if 'RMSD' in df.columns:
-            rmsd_data = pd.to_numeric(df['RMSD'], errors='coerce').values
+        # 获取帧索引
+        frame_indices = df['Frame_ID'].values
+        sampled_indices = frame_indices[selected]
+
+        # 重新计算采样组的RMSD（基于本组mean structure）
+        sampled_rmsd = []
+        if system_path:
+            sampled_rmsd = _calculate_group_rmsd(system_path, sampled_indices.tolist())
+            if len(sampled_rmsd) == 0:
+                logger.warning(f"无法计算采样组RMSD，使用原有RMSD数据")
+                sampled_rmsd = pd.to_numeric(df.loc[selected, 'RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
+        else:
+            logger.warning(f"未找到系统路径 {system}，使用原有RMSD数据")
+            sampled_rmsd = pd.to_numeric(df.loc[selected, 'RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
 
         # 采样算法结果
-        sampled_metrics = adapt_sampling_metrics(
+        sampled_metrics = MetricsToolkit.adapt_sampling_metrics(
             vectors[selected], vectors,
-            rmsd_data[selected] if len(rmsd_data) > 0 else []
+            sampled_rmsd if len(sampled_rmsd) > 0 else []
         )
 
         # 随机采样比较
-        rand_results = _run_random_sampling_comparison(vectors, selected, rmsd_data, k, n)
+        rand_results = _run_random_sampling_comparison(vectors, selected, df, system_path, sampled_indices, k, n)
 
         # 均匀采样比较
-        uniform_metrics = _run_uniform_sampling_comparison(vectors, rmsd_data, k, n)
+        uniform_metrics = _run_uniform_sampling_comparison(vectors, df, system_path, k, n)
 
         # 构建结果行
         return _build_result_row(
@@ -94,40 +122,69 @@ def _analyze_single_system(file_path):
         return None
 
 
-def _run_random_sampling_comparison(vectors, selected_mask, rmsd_data, k, n):
+def _run_random_sampling_comparison(vectors, selected_mask, df, system_path, sampled_indices, k, n):
     """运行随机采样比较"""
     rand_results = []
+    frame_indices = df['Frame_ID'].values
+    
     for _ in range(10):
         idx = np.random.choice(n, k, replace=False)
-        sel_metrics = adapt_sampling_metrics(
-            vectors[idx], vectors,
-            rmsd_data[idx] if len(rmsd_data) > 0 else []
+        sel_vectors = vectors[idx]
+        sel_frame_indices = frame_indices[idx]
+        
+        # 重新计算随机组的RMSD
+        rand_rmsd = []
+        if system_path:
+            rand_rmsd = _calculate_group_rmsd(system_path, sel_frame_indices.tolist())
+            if len(rand_rmsd) == 0:
+                logger.warning(f"无法计算随机组RMSD，使用原有RMSD数据")
+                rand_rmsd = pd.to_numeric(df.iloc[idx]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
+        else:
+            rand_rmsd = pd.to_numeric(df.iloc[idx]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
+        
+        sel_metrics = MetricsToolkit.adapt_sampling_metrics(
+            sel_vectors, vectors,
+            rand_rmsd if len(rand_rmsd) > 0 else []
         )
         rand_results.append(sel_metrics)
     return rand_results
 
 
-def _run_uniform_sampling_comparison(vectors, rmsd_data, k, n):
+def _run_uniform_sampling_comparison(vectors, df, system_path, k, n):
     """运行均匀采样比较"""
     if k == 0:
         return {}
 
+    frame_indices = df['Frame_ID'].values
     idx_uniform = SamplingStrategy.uniform_sample_indices(n, k)
-    return adapt_sampling_metrics(
-        vectors[idx_uniform], vectors,
-        rmsd_data[idx_uniform] if len(rmsd_data) > 0 else []
+    sel_vectors = vectors[idx_uniform]
+    sel_frame_indices = frame_indices[idx_uniform]
+    
+    # 重新计算均匀组的RMSD
+    uniform_rmsd = []
+    if system_path:
+        uniform_rmsd = _calculate_group_rmsd(system_path, sel_frame_indices.tolist())
+        if len(uniform_rmsd) == 0:
+            logger.warning(f"无法计算均匀组RMSD，使用原有RMSD数据")
+            uniform_rmsd = pd.to_numeric(df.iloc[idx_uniform]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
+    else:
+        uniform_rmsd = pd.to_numeric(df.iloc[idx_uniform]['RMSD'], errors='coerce').values if 'RMSD' in df.columns else []
+    
+    return MetricsToolkit.adapt_sampling_metrics(
+        sel_vectors, vectors,
+        uniform_rmsd if len(uniform_rmsd) > 0 else []
     )
 
 
 def _build_result_row(system, sample_ratio, n, k, sampled_metrics, rand_results, uniform_metrics):
     """构建结果行数据"""
     # 收集随机采样统计
-    rand_ANND = collect_metric_values(rand_results, 'ANND')
-    rand_MPD = collect_metric_values(rand_results, 'MPD')
-    rand_Cov = collect_metric_values(rand_results, 'Coverage_Ratio')
-    rand_JS = collect_metric_values(rand_results, 'JS_Divergence')
-    rand_RMSD = collect_metric_values(rand_results, 'RMSD_Mean')
-    rand_EnergyRange = collect_metric_values(rand_results, 'Energy_Range')
+    rand_ANND = MetricsToolkit.collect_metric_values(rand_results, 'ANND')
+    rand_MPD = MetricsToolkit.collect_metric_values(rand_results, 'MPD')
+    rand_Cov = MetricsToolkit.collect_metric_values(rand_results, 'Coverage_Ratio')
+    rand_JS = MetricsToolkit.collect_metric_values(rand_results, 'JS_Divergence')
+    rand_RMSD = MetricsToolkit.collect_metric_values(rand_results, 'RMSD_Mean')
+    rand_EnergyRange = MetricsToolkit.collect_metric_values(rand_results, 'Energy_Range')
 
     return {
         # 基本信息
@@ -259,6 +316,67 @@ def _create_summary_table(rows, result_dir):
     summary_df.to_csv(summary_path, index=False)
     logger.info(f"均值对比汇总表格已保存到 {summary_path}")
     logger.info(f"汇总了 {len(rows)} 个系统的数据")
+
+
+def _calculate_group_rmsd(system_path: str, frame_indices: List[int]) -> np.ndarray:
+    """为指定帧索引列表计算基于本组mean structure的RMSD序列
+    
+    Args:
+        system_path: 系统目录路径
+        frame_indices: 帧号列表（Frame_ID）
+        
+    Returns:
+        RMSD序列数组
+    """
+    try:
+        # 加载原子坐标数据
+        stru_dir = os.path.join(system_path, "OUT.ABACUS", "STRU")
+        if not os.path.exists(stru_dir):
+            logger.warning(f"STRU目录不存在: {stru_dir}")
+            return np.array([])
+            
+        parser = StrUParser(exclude_hydrogen=True)
+        all_frames = parser.parse_trajectory(stru_dir)
+        
+        if not all_frames:
+            logger.warning(f"未找到有效轨迹数据: {system_path}")
+            return np.array([])
+            
+        # 按frame_id排序
+        all_frames.sort(key=lambda x: x.frame_id)
+        
+        # 将帧号映射到数组索引（帧号 // 10）
+        array_indices = []
+        for frame_id in frame_indices:
+            idx = frame_id // 10
+            if idx < len(all_frames):
+                array_indices.append(idx)
+            else:
+                logger.warning(f"帧号 {frame_id} 对应的数组索引 {idx} 超出范围 (总帧数: {len(all_frames)})")
+                
+        if len(array_indices) < 2:
+            logger.warning(f"有效帧数不足: {len(array_indices)}")
+            return np.array([])
+            
+        # 提取指定帧的positions
+        selected_positions = [all_frames[idx].positions.copy() for idx in array_indices]
+            
+        # 计算本组的mean structure
+        mean_structure, aligned_positions = RMSDCalculator.iterative_mean_structure(
+            selected_positions, max_iter=20, tol=1e-6
+        )
+        
+        # 计算每帧到mean structure的RMSD
+        rmsds = []
+        for pos in aligned_positions:
+            rmsd = RMSDCalculator.calculate_rmsd(pos, mean_structure)
+            rmsds.append(rmsd)
+            
+        return np.array(rmsds, dtype=float)
+        
+    except Exception as e:
+        logger.error(f"计算组RMSD时出错: {e}")
+        return np.array([])
 
 
 if __name__ == '__main__':
