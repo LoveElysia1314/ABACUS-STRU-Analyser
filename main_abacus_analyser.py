@@ -27,7 +27,7 @@ from src.utils.common import ErrorHandler as _Err
 
 # 采样效果评估（采样对比）
 try:
-    from sampling_compare_demo import analyse_sampling_compare as SamplingComparisonRunner
+    from src.analysis.sampling_comparison import analyse_sampling_compare as SamplingComparisonRunner
     SAMPLING_COMPARISON_AVAILABLE = True
 except Exception:
     SAMPLING_COMPARISON_AVAILABLE = False

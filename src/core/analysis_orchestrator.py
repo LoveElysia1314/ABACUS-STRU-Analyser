@@ -92,7 +92,7 @@ class AnalysisOrchestrator:
     def run_sampling_evaluation(self, output_dir: str):
         """运行采样效果评估"""
         try:
-            from sampling_compare_demo import analyse_sampling_compare as SamplingComparisonRunner
+            from ..analysis.sampling_comparison import analyse_sampling_compare as SamplingComparisonRunner
             self.logger.info("开始采样效果评估...")
             SamplingComparisonRunner(output_dir)
         except Exception as e:
