@@ -14,26 +14,24 @@ import logging
 import multiprocessing as mp
 import glob
 import json
-from typing import List, Dict, Optional, Tuple, Any, Set
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Set
 from dataclasses import dataclass
 from enum import Enum
 
 # 导入自定义模块
 from src.utils.logmanager import LoggerManager
 from src.io.path_manager import PathManager
-from src.core.system_analyser import SystemAnalyser, BatchAnalyser
+from src.core.system_analyser import SystemAnalyser
 from src.io.result_saver import ResultSaver
 from src.utils.common import ErrorHandler
 from src.utils.common import FileUtils
-from src.utils.common import ErrorHandler as _Err
 from src.analysis.sampling_comparison.streaming_compare import StreamingSamplingComparisonManager
 
 # 采样效果评估（采样对比）
 try:
     from src.analysis.sampling_comparison import analyse_sampling_compare as SamplingComparisonRunner
     SAMPLING_COMPARISON_AVAILABLE = True
-except Exception:
+except ImportError:
     SAMPLING_COMPARISON_AVAILABLE = False
 
 try:
@@ -74,9 +72,33 @@ class AnalysisConfig:
             self.search_paths = []
 
 
-# 多进程全局变量
-_GLOBAL_ANALYSER = None
-_GLOBAL_REUSE_MAP: Dict[str, List[int]] = {}
+# 多进程工作上下文
+class WorkerContext:
+    """多进程工作上下文，避免使用全局变量"""
+    _analyser = None
+    _reuse_map: Dict[str, List[int]] = {}
+
+    @classmethod
+    def initialize(cls, analyser, reuse_map: Dict[str, List[int]]):
+        """初始化工作上下文"""
+        cls._analyser = analyser
+        cls._reuse_map = reuse_map or {}
+
+    @classmethod
+    def get_analyser(cls):
+        """获取分析器实例"""
+        return cls._analyser
+
+    @classmethod
+    def get_reuse_map(cls):
+        """获取复用映射"""
+        return cls._reuse_map
+
+    @classmethod
+    def set_sampling_only(cls, sampling_only: bool):
+        """设置采样模式"""
+        if cls._analyser:
+            cls._analyser._sampling_only = sampling_only
 
 
 def _worker_analyse_system(system_path: str, sample_ratio: float, power_p: float, 
@@ -97,20 +119,17 @@ def _worker_analyse_system(system_path: str, sample_ratio: float, power_p: float
 def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float,
                 reuse_map: Dict[str, List[int]], sampling_only: bool = False, log_queue: mp.Queue = None):
     """工作进程初始化"""
-    global _GLOBAL_ANALYSER, _GLOBAL_REUSE_MAP
+    analyser = SystemAnalyser(include_hydrogen=False,
+                              sample_ratio=sample_ratio,
+                              power_p=power_p,
+                              pca_variance_ratio=pca_variance_ratio)
 
-    _GLOBAL_ANALYSER = SystemAnalyser(include_hydrogen=False,
-                                      sample_ratio=sample_ratio,
-                                      power_p=power_p,
-                                      pca_variance_ratio=pca_variance_ratio)
-    _GLOBAL_REUSE_MAP = reuse_map or {}
-
-    # 设置采样模式
-    _GLOBAL_ANALYSER._sampling_only = sampling_only
+    WorkerContext.initialize(analyser, reuse_map)
+    WorkerContext.set_sampling_only(sampling_only)
 
     # Setup multiprocess logging for worker
     if log_queue is not None:
-        worker_logger = LoggerManager.setup_worker_logger(
+        LoggerManager.setup_worker_logger(
             name="WorkerProcess",
             queue=log_queue,
             level=logging.INFO,
@@ -120,23 +139,24 @@ def _child_init(sample_ratio: float, power_p: float, pca_variance_ratio: float,
 
 def _child_worker(system_path: str):
     """工作进程执行函数（支持采样帧复用和仅采样模式）"""
-    global _GLOBAL_ANALYSER, _GLOBAL_REUSE_MAP
-    
-    if _GLOBAL_ANALYSER is None:
-        sampling_only = getattr(_GLOBAL_ANALYSER, '_sampling_only', False) if _GLOBAL_ANALYSER else False
-        return _worker_analyse_system(system_path, 0.05, 0.5, 0.90, 
-                                    pre_sampled_frames=None, sampling_only=sampling_only)
-    
+    analyser = WorkerContext.get_analyser()
+
+    if analyser is None:
+        # 备用情况：如果上下文未初始化，使用默认参数
+        return _worker_analyse_system(system_path, 0.05, 0.5, 0.90,
+                                    pre_sampled_frames=None, sampling_only=False)
+
     sys_name = os.path.basename(system_path.rstrip('/\\'))
-    pre_frames = _GLOBAL_REUSE_MAP.get(sys_name)
-    
+    reuse_map = WorkerContext.get_reuse_map()
+    pre_frames = reuse_map.get(sys_name)
+
     # 检查是否为仅采样模式
-    sampling_only = getattr(_GLOBAL_ANALYSER, '_sampling_only', False)
-    
+    sampling_only = getattr(analyser, '_sampling_only', False)
+
     if sampling_only:
-        return _GLOBAL_ANALYSER.analyse_system_sampling_only(system_path, pre_sampled_frames=pre_frames)
+        return analyser.analyse_system_sampling_only(system_path, pre_sampled_frames=pre_frames)
     else:
-        return _GLOBAL_ANALYSER.analyse_system(system_path, pre_sampled_frames=pre_frames)
+        return analyser.analyse_system(system_path, pre_sampled_frames=pre_frames)
 
 
 class AnalysisOrchestrator:
@@ -181,8 +201,9 @@ class AnalysisOrchestrator:
                 LoggerManager.stop_listener(self.log_listener)
                 if self.logger:
                     self.logger.info("日志监听器已停止")
-            except Exception as e:
-                print(f"停止日志监听器时出错: {str(e)}")
+            except (OSError, ValueError) as e:
+                if self.logger:
+                    self.logger.warning("停止日志监听器时出错: %s", e)
     
     def resolve_search_paths(self) -> List[str]:
         """解析搜索路径，支持通配符展开"""
@@ -196,14 +217,14 @@ class AnalysisOrchestrator:
                 expanded_dirs = [p for p in expanded if os.path.isdir(p)]
                 resolved_paths.extend(expanded_dirs)
                 if expanded_dirs:
-                    self.logger.info(f"通配符 '{path_pattern}' 展开为 {len(expanded_dirs)} 个目录")
+                    self.logger.info("通配符 '%s' 展开为 %d 个目录", path_pattern, len(expanded_dirs))
                 else:
-                    self.logger.warning(f"通配符 '{path_pattern}' 未匹配到任何目录")
+                    self.logger.warning("通配符 '%s' 未匹配到任何目录", path_pattern)
             else:
                 if os.path.isdir(path_pattern):
                     resolved_paths.append(path_pattern)
                 else:
-                    self.logger.warning(f"路径不存在或不是目录: {path_pattern}")
+                    self.logger.warning("路径不存在或不是目录: %s", path_pattern)
         
         unique_paths = list(set(os.path.abspath(p) for p in resolved_paths))
         return unique_paths
@@ -213,7 +234,7 @@ class AnalysisOrchestrator:
         all_mol_systems = {}
         
         for search_path in search_paths:
-            self.logger.info(f"搜索路径: {search_path}")
+            self.logger.info("搜索路径: %s", search_path)
             try:
                 if self.config.include_project:
                     mol_systems = FileUtils.find_abacus_systems(search_path, include_project=True)
@@ -226,9 +247,9 @@ class AnalysisOrchestrator:
                     else:
                         all_mol_systems[mol_key] = system_paths
                 
-                self.logger.info(f"在 {search_path} 中发现 {len(mol_systems)} 个分子类型")
-            except Exception as e:
-                self.logger.error(f"搜索路径 {search_path} 时出错: {str(e)}")
+                self.logger.info("在 %s 中发现 %d 个分子类型", search_path, len(mol_systems))
+            except (OSError, PermissionError) as e:
+                self.logger.error("搜索路径 %s 时出错: %s", search_path, e)
         
         return all_mol_systems
     
@@ -248,8 +269,8 @@ class AnalysisOrchestrator:
             and self.config.enable_sampling_eval):
             try:
                 self.sampling_stream_manager = StreamingSamplingComparisonManager(actual_output_dir, logger=self.logger)
-            except Exception as e:
-                self.logger.warning(f"初始化流式采样比较失败，回退离线模式: {e}")
+            except (ImportError, AttributeError) as e:
+                self.logger.warning("初始化流式采样比较失败，回退离线模式: %s", e)
                 self.sampling_stream_manager = None
         
         self.logger.info(f"使用参数专用目录: {actual_output_dir}")
@@ -301,10 +322,10 @@ class AnalysisOrchestrator:
         """确定工作进程数"""
         if self.config.workers == -1:
             try:
-                workers = int(os.environ.get('SLURM_CPUS_PER_TASK', 
+                workers = int(os.environ.get('SLURM_CPUS_PER_TASK',
                            os.environ.get('SLURM_JOB_CPUS_PER_NODE', mp.cpu_count())))
-            except Exception as e:
-                self.logger.warning(f"Failed to determine optimal worker count from environment: {e}")
+            except (ValueError, TypeError) as e:
+                self.logger.warning("Failed to determine optimal worker count from environment: %s", e)
                 workers = max(1, mp.cpu_count())
         else:
             workers = max(1, self.config.workers)
@@ -401,12 +422,12 @@ class AnalysisOrchestrator:
                         try:
                             system_name = result[0].system_name
                             system_path = result[0].system_path
-                        except Exception:
+                        except (IndexError, AttributeError):
                             system_path = system_paths[i] if i < len(system_paths) else None
                             system_name = os.path.basename(system_path.rstrip('/\\')) if system_path else "未知"
 
                         mode_suffix = "[仅采样]" if sampling_only else ""
-                        self.logger.info(f"分析完成 (已完成 {len(analysis_results)}/{len(system_paths)}): {system_name} {mode_suffix}")
+                        self.logger.info("分析完成 (已完成 %d/%d): %s %s", len(analysis_results), len(system_paths), system_name, mode_suffix)
                         
                         # 即时导出（如果有采样结果）
                         if system_path and len(result) >= 2:
@@ -425,8 +446,8 @@ class AnalysisOrchestrator:
                                         'pca_variance_ratio': self.config.pca_variance_ratio
                                     })) if (self._targets_flush_interval == 1 or ((len(analysis_results) % self._targets_flush_interval) == 0)) else None
                                 )
-                            except Exception as se:
-                                self.logger.warning(f"流式保存体系结果失败(忽略): {se}")
+                            except (IOError, OSError) as se:
+                                self.logger.warning("流式保存体系结果失败(忽略): %s", se)
                         # 流式采样比较
                         if (not sampling_only) and getattr(self, 'sampling_stream_manager', None) and len(result) >= 7:
                             try:
@@ -471,11 +492,11 @@ class AnalysisOrchestrator:
                                         sampled_mask=sampled_mask,
                                         frame_ids=frame_ids_arr
                                     )
-                            except Exception as ce:
-                                self.logger.warning(f"流式采样比较更新失败(忽略): {ce}")
+                            except (AttributeError, ValueError) as ce:
+                                self.logger.warning("流式采样比较更新失败(忽略): %s", ce)
                     else:
                         self.logger.warning("并行分析返回空结果，标记为失败")
-            except Exception as e:
+            except (RuntimeError, ValueError) as e:
                 ErrorHandler.log_detailed_error(
                     self.logger, e, "并行处理出错",
                     additional_info={
@@ -616,7 +637,6 @@ class AnalysisOrchestrator:
         if self.streaming_enabled:
             self.logger.info("流式模式：跳过集中写入，执行兜底检查")
             try:
-                from collections import defaultdict
                 # 读取 progress 已处理体系
                 progress = ResultSaver.load_progress(self.current_output_dir)
                 done = set(progress.get('processed_systems', []))
@@ -772,9 +792,10 @@ class MainApp:
                 import traceback
                 self.orchestrator.logger.error(f"详细错误信息: {traceback.format_exc()}")
             else:
-                print(f"主程序执行出错: {str(e)}")
+                import sys
+                print(f"主程序执行出错: {str(e)}", file=sys.stderr)
                 import traceback
-                print(traceback.format_exc())
+                print(traceback.format_exc(), file=sys.stderr)
         finally:
             if self.orchestrator:
                 self.orchestrator.cleanup_logging()
@@ -908,8 +929,8 @@ class MainApp:
             swap_counts = [result[2] for result in analysis_results if len(result) > 2]
             if swap_counts:
                 import numpy as np
-                self.orchestrator.logger.info(f"采样优化统计:")
-                self.orchestrator.logger.info(f"  平均交换次数: {np.mean(swap_counts):.2f}")
+                self.orchestrator.logger.info("采样优化统计:")
+                self.orchestrator.logger.info("  平均交换次数: %.2f", np.mean(swap_counts))
                 self.orchestrator.logger.info(f"  总交换次数: {int(sum(swap_counts))}")
 
         self.orchestrator.logger.info(f"总耗时: {elapsed:.1f}s ({elapsed/60:.1f} 分钟)")
