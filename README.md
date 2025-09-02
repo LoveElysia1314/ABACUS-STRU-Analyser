@@ -1,7 +1,26 @@
 
 # ABACUS-STRU-Analyser
 
-- ⚡ **构象向量化 / Conformation Vectorization**：基于非氢原子对距离，PCA降维，自动忽略旋转/平移/缩放。
+- ⚡ **构象向量化 / Conformation Vectorization**：基于非氢原子对距### 主分析器参数 / Main Analyser
+| 参数 | 短选项 | 默认值 | 说明 | Description |
+|------|--------|--------|------|-------------|
+| --sample_ratio | -r | 0.05 | 采样比例 | Sampling ratio |
+| --power_p | -p | -0.5 | 幂平均距离p值 | Power mean p value |
+| --pca_variance_ratio | -v | 0.90 | PCA累计方差贡献率 | PCA explained variance ratio |
+| --workers | -w | -1 | 并行进程数 | Number of workers (-1=auto) |
+| --output_dir | -o | analysis_results | 输出目录 | Output directory |
+| --search_path | -s | 当前目录父目录 | 搜索路径 | Search path(s) |
+| --include_project | -i | False | 包含项目自身 | Include project dir |
+| --force_recompute | -f | False | 强制重算（忽略进度） | Force recompute (ignore progress) |
+| --correlation_analysis | -c | True | 启用相关性分析 | Enable correlation analysis |
+| --sampling_comparison | -sc | True | 启用采样方法对比 | Enable sampling comparison |
+
+### 相关性分析器参数 / Correlation Analyser
+| 参数 | 短选项 | 默认值 | 说明 | Description |
+|------|--------|--------|------|-------------|
+| --input | -i | auto | 输入CSV文件路径 | Input CSV file path |
+| --output | -o | combined_analysis_results | 输出目录 | Output directory |
+| --no-log-file |  | False | 禁用日志文件输出 | Disable log file output |转/平移/缩放。
 - 🧮 **PCA降维 / PCA Dimensionality Reduction**：主成分分析空间，所有分析在降维空间进行。
 - 🔬 **多物理量融合 / Multi-Physics Integration**：能量与PCA分量综合向量，信息全面。
 - 🎯 **智能采样 / Intelligent Sampling**：幂平均距离最大化贪心采样算法。
@@ -66,9 +85,12 @@ python main_abacus_analyser.py -s "/path/to/data" -r 0.05 -p -0.5 -v 0.90 -w 4
 
 # 相关性分析 / Correlation analysis
 python main_correlation_analyser.py
+
+# 采样方法对比分析 / Sampling method comparison
+python sampling_compare_demo.py
 ```
 
-**注意**：主分析完成后，每个体系会自动导出DeepMD训练数据到 `deepmd_npy_per_system/` 目录，无需额外配置。
+**注意**：主分析完成后，每个体系会自动导出DeepMD训练数据到 `deepmd_npy_per_system/` 目录，并自动进行相关性分析，无需额外配置。
 
 ---
 
@@ -85,13 +107,8 @@ python main_correlation_analyser.py
 | --search_path | -s | 当前目录父目录 | 搜索路径 | Search path(s) |
 | --include_project | -i | False | 包含项目自身 | Include project dir |
 | --force_recompute | -f | False | 强制重算（忽略进度） | Force recompute (ignore progress) |
-
-### 相关性分析器参数 / Correlation Analyser
-| 参数 | 短选项 | 默认值 | 说明 | Description |
-|------|--------|--------|------|-------------|
-| --input | -i | auto | 输入CSV | Input CSV |
-| --output | -o | combined_analysis_results | 输出目录 | Output dir |
-| --no-log-file |  | False | 禁用日志文件 | Disable log file |
+| --correlation_analysis | -c | True | 启用相关性分析 | Enable correlation analysis |
+| --sampling_comparison | -sc | True | 启用采样方法对比 | Enable sampling comparison |
 
 ---
 
@@ -186,6 +203,10 @@ python main_abacus_analyser.py -r 0.02 -v 0.95
 python main_abacus_analyser.py -r 0.10 -v 0.85
 # 强制重算 / Force recompute
 python main_abacus_analyser.py -f
+# 仅进行相关性分析（跳过采样对比） / Correlation analysis only (skip sampling comparison)
+python main_abacus_analyser.py -sc false
+# 仅进行采样对比（跳过相关性分析） / Sampling comparison only (skip correlation analysis)
+python main_abacus_analyser.py -c false
 # 相关性分析指定输入 / Custom input for correlation
 python main_correlation_analyser.py -i custom.csv -o custom_results
 ```

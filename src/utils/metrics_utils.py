@@ -204,6 +204,42 @@ class MetricsToolkit:
         except Exception:
             return {}
 
+    # ---- Wrapper methods for legacy compatibility ----
+    @staticmethod
+    def wrap_diversity(vectors: np.ndarray) -> Dict[str, float]:
+        """Legacy wrapper for diversity metrics."""
+        m = MetricsToolkit.compute_diversity_metrics(vectors)
+        return {
+            'coverage_ratio': m.coverage_ratio,
+            'pca_variance_ratio': m.pca_variance_ratio,
+            'energy_range': m.energy_range,
+        }
+
+    @staticmethod
+    def wrap_rmsd(values: Sequence[float]) -> Dict[str, float]:
+        """Legacy wrapper for RMSD summary."""
+        s = MetricsToolkit.summarize_rmsd(values)
+        return {
+            'rmsd_mean': s.rmsd_mean,
+            'rmsd_std': s.rmsd_std,
+            'rmsd_min': s.rmsd_min,
+            'rmsd_max': s.rmsd_max,
+        }
+
+    @staticmethod
+    def wrap_similarity(sample_vectors: np.ndarray, full_vectors: np.ndarray) -> Dict[str, float]:
+        """Legacy wrapper for distribution similarity."""
+        m = MetricsToolkit.compute_distribution_similarity(sample_vectors, full_vectors)
+        return {
+            'js_divergence': m.js_divergence,
+        }
+
+    @staticmethod
+    def collect_metric_values(results: List[Dict[str, Any]], key: str) -> List[float]:
+        """Collect non-NaN values for a specific metric from results list."""
+        vals = [r.get(key) for r in results]
+        return [v for v in vals if v is not None and not (isinstance(v, float) and np.isnan(v))]
+
 
 # Convenience re-exports for legacy style imports if needed
 compute_basic_distance_metrics = MetricsToolkit.compute_basic_distance_metrics
@@ -211,3 +247,7 @@ compute_diversity_metrics = MetricsToolkit.compute_diversity_metrics
 compute_distribution_similarity = MetricsToolkit.compute_distribution_similarity
 summarize_rmsd = MetricsToolkit.summarize_rmsd
 adapt_sampling_metrics = MetricsToolkit.adapt_sampling_metrics
+wrap_diversity = MetricsToolkit.wrap_diversity
+wrap_rmsd = MetricsToolkit.wrap_rmsd
+wrap_similarity = MetricsToolkit.wrap_similarity
+collect_metric_values = MetricsToolkit.collect_metric_values

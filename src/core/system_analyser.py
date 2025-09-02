@@ -27,11 +27,12 @@ from ..utils.data_utils import ErrorHandler
 from ..utils.metrics_utils import MetricsToolkit, compute_distribution_similarity  # Level 4 adapters
 
 
-class RMSDCalculator:  # 保留兼容入口，内部委托 structural_metrics
-    """兼容层：委托到 utils.structural_metrics (Level 3)。"""
+class RMSDCalculator:  # 兼容层：完全委托到 utils.structural_metrics
+    """兼容层：委托到 utils.structural_metrics，避免重复实现。"""
 
     @staticmethod
     def kabsch_align(mobile: np.ndarray, target: np.ndarray) -> np.ndarray:
+        """直接使用统一的 kabsch_align 实现"""
         if _sm_kabsch_align is not None:
             return _sm_kabsch_align(mobile, target)
         # 回退：最简实现（不做旋转，仅中心对齐）
@@ -41,28 +42,36 @@ class RMSDCalculator:  # 保留兼容入口，内部委托 structural_metrics
 
     @staticmethod
     def calculate_rmsd(coords1: np.ndarray, coords2: np.ndarray) -> float:
+        """计算两个坐标集之间的RMSD"""
         diff = coords1 - coords2
         return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
 
     @staticmethod
     def iterative_alignment(frames: List, max_iterations: int = 10, tolerance: float = 1e-5) -> Tuple[np.ndarray, List[float]]:
+        """使用统一的迭代对齐算法"""
         if not frames:
             return np.array([]), []
-        if _sm_iter_mean_struct is None:
+
+        if _sm_iter_mean_struct is not None:
+            # 使用统一实现
+            pos_list = [f.positions.copy() for f in frames]
+            mean_struct, aligned_list = _sm_iter_mean_struct(pos_list, max_iter=max_iterations, tol=tolerance)
+            if aligned_list:
+                # 使用统一的 RMSD 计算
+                rmsds = []
+                for aligned_pos in aligned_list:
+                    rmsd = RMSDCalculator.calculate_rmsd(aligned_pos, mean_struct)
+                    rmsds.append(rmsd)
+            else:
+                rmsds = []
+            return mean_struct, rmsds
+        else:
             # 回退到旧逻辑（简化）
             ref_coords = frames[0].positions.copy()
             all_coords = [frame.positions.copy() for frame in frames]
             aligned = [coords - coords.mean(axis=0) for coords in all_coords]
             rmsds = [RMSDCalculator.calculate_rmsd(a, ref_coords) for a in aligned]
             return ref_coords, rmsds
-        # 使用新统一实现：先提取 positions 列表
-        pos_list = [f.positions.copy() for f in frames]
-        mean_struct, aligned_list = _sm_iter_mean_struct(pos_list, max_iter=max_iterations, tol=tolerance)
-        if aligned_list:
-            rmsds = [RMSDCalculator.calculate_rmsd(a, mean_struct) for a in aligned_list]
-        else:
-            rmsds = []
-        return mean_struct, rmsds
 
 
 class PCAReducer:
