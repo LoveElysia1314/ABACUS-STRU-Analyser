@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import os
-from typing import Dict, List, Any, Callable, Sequence
+from typing import Dict, List, Any, Callable, Sequence, Optional, Union
 from dataclasses import dataclass
 import json
 
@@ -47,7 +47,7 @@ class MetricSpec:
     header: str
     category: str  # identity | scale | core_distance | diversity | distribution | pca
     extractor: Callable[[Any], Any]
-    formatter: Callable[[Any], str] | None = None  # 可选格式化
+    formatter: Optional[Callable[[Any], str]] = None  # 可选格式化
 
     def get_value(self, obj: Any) -> str:
         raw = None
@@ -257,7 +257,11 @@ class MetricsToolkit:
         }
 
     @staticmethod
-    def adapt_sampling_metrics(selected_vectors: np.ndarray, full_vectors: np.ndarray, rmsd_values: np.ndarray | List[float] | None = None) -> Dict[str, Any]:
+    def adapt_sampling_metrics(
+        selected_vectors: np.ndarray,
+        full_vectors: np.ndarray,
+        rmsd_values: Optional[Union[np.ndarray, List[float]]] = None
+    ) -> Dict[str, Any]:
         """Convenience wrapper for sampling comparison."""
         try:
             basic = MetricsToolkit.compute_basic_distance_metrics(selected_vectors)
@@ -318,7 +322,7 @@ def build_summary_row(metrics_obj: Any) -> List[str]:
     return [spec.get_value(metrics_obj) for g in GROUP_ORDER for spec in _GROUP_TO_SPECS[g]]
 
 
-def iter_metric_specs(category: str | None = None):
+def iter_metric_specs(category: Optional[str] = None):
     if category is None:
         for g in GROUP_ORDER:
             for spec in _GROUP_TO_SPECS[g]:

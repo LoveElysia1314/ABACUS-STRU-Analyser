@@ -3,7 +3,7 @@
 import csv
 import logging
 import os
-from typing import List, Dict, Tuple, Sequence
+from typing import Optional, List, Dict, Tuple, Sequence
 import datetime
 
 import numpy as np
@@ -496,6 +496,83 @@ class ResultSaver:
             )
             raise
 
+    @staticmethod
+    def export_sampled_frames_per_system(
+        frames: Sequence,
+        sampled_frame_ids: List[int],
+        system_path: str,
+        output_root: str,
+        system_name: str,
+        logger,
+        force: bool = False,
+    ) -> Optional[str]:
+        """
+        Export sampled frames for a single system to DeepMD format.
+
+        Args:
+            frames: Sequence of frame objects
+            sampled_frame_ids: List of sampled frame IDs
+            system_path: Path to the ABACUS system directory
+            output_root: Root output directory
+            system_name: Name of the system
+            logger: Logger instance
+            force: Whether to force re-export
+
+        Returns:
+            Path to the exported directory or None if failed
+        """
+        if not sampled_frame_ids:
+            logger.debug(f"[deepmd-export] {system_name} 无采样帧，跳过导出")
+            return None
+
+        target_dir = os.path.join(output_root, system_name)
+        marker_file = os.path.join(target_dir, 'export.done')
+
+        if os.path.isdir(target_dir) and os.path.exists(marker_file) and not force:
+            logger.debug(f"[deepmd-export] {system_name} 已存在且未强制覆盖，跳过")
+            return target_dir
+
+        try:
+            import dpdata  # type: ignore
+            id2idx = ResultSaver._build_frame_id_index(frames)
+            subset_indices = [id2idx[fid] for fid in sampled_frame_ids if fid in id2idx]
+
+            if not subset_indices:
+                logger.warning(f"[deepmd-export] {system_name} 采样帧索引映射为空，跳过")
+                return None
+
+            ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ALL_TYPE_MAP)
+            n_total = len(ls)
+            valid_subset = [i for i in subset_indices if 0 <= i < n_total]
+
+            if not valid_subset:
+                logger.warning(f"[deepmd-export] {system_name} 有效帧子集为空，跳过")
+                return None
+
+            sub_ls = ls[valid_subset]
+            os.makedirs(target_dir, exist_ok=True)
+            sub_ls.to_deepmd_npy(target_dir)
+
+            with open(marker_file, 'w', encoding='utf-8') as f:
+                f.write(f"frames={len(valid_subset)}\n")
+
+            logger.info(f"[deepmd-export] 导出 {system_name} deepmd npy 成功，帧数={len(valid_subset)} -> {target_dir}")
+            return target_dir
+
+        except Exception as e:
+            logger.error(f"[deepmd-export] 导出 {system_name} 失败: {e}")
+            return None
+
+    @staticmethod
+    def _build_frame_id_index(frames: Sequence) -> Dict[int, int]:
+        """Build mapping from frame_id to frame index"""
+        mapping: Dict[int, int] = {}
+        for idx, f in enumerate(frames):
+            fid = getattr(f, 'frame_id', None)
+            if fid is not None and fid not in mapping:
+                mapping[fid] = idx
+        return mapping
+
 
 # ---- DeepMD Export Functionality (merged from deepmd_exporter.py) ----
 
@@ -526,7 +603,7 @@ def export_sampled_frames_per_system(
     system_name: str,
     logger,
     force: bool = False,
-) -> str | None:
+    ) -> Optional[str]:
     """
     Export sampled frames for a single system to DeepMD format.
 

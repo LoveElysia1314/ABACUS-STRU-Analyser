@@ -66,7 +66,7 @@ class RMSDCalculator:
         return mean_structure, aligned_positions
 
     @staticmethod
-    def compute_rmsd_series(positions_list: List[np.ndarray], reference: np.ndarray | None = None) -> np.ndarray:
+    def compute_rmsd_series(positions_list: List[np.ndarray], reference: Optional[np.ndarray] = None) -> np.ndarray:
         """Compute per-frame RMSD to reference (default: iterative mean)."""
         if not positions_list:
             return np.array([])
