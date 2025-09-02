@@ -7,15 +7,6 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-#!/usr/bin/env python
-
-import logging
-import os
-import re
-from typing import List, Optional, Tuple
-
-import numpy as np
-
 from ..io.stru_parser import StrUParser
 from ..utils import ValidationUtils
 from .metrics import MetricCalculator, TrajectoryMetrics

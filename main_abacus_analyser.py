@@ -205,6 +205,17 @@ class AnalysisOrchestrator:
                 if self.logger:
                     self.logger.warning("停止日志监听器时出错: %s", e)
     
+    def _sync_sampled_frames_to_targets(self, result: tuple, path_manager: PathManager) -> None:
+        """同步采样帧到PathManager.targets"""
+        if len(result) >= 2:
+            metrics = result[0]
+            system_name_curr = getattr(metrics, 'system_name', 'unknown')
+            sampled_frames_curr = getattr(metrics, 'sampled_frames', [])
+            for target in path_manager.targets:
+                if target.system_name == system_name_curr:
+                    target.sampled_frames = sampled_frames_curr
+                    break
+    
     def resolve_search_paths(self) -> List[str]:
         """解析搜索路径，支持通配符展开"""
         if not self.config.search_paths:
@@ -310,11 +321,10 @@ class AnalysisOrchestrator:
         if not self.config.force_recompute and params_compatible:
             self.logger.info("检查已有分析结果以启用增量计算...")
             path_manager.check_existing_results()
-        else:
-            if self.config.force_recompute:
-                self.logger.info("强制重新计算模式：将重新计算所有输出")
-            elif not params_compatible and loaded_existing:
-                self.logger.info("参数不兼容：将重新计算所有输出")
+        elif self.config.force_recompute:
+            self.logger.info("强制重新计算模式：将重新计算所有输出")
+        elif not params_compatible and loaded_existing:
+            self.logger.info("参数不兼容：将重新计算所有输出")
         
         return False
     
@@ -437,14 +447,7 @@ class AnalysisOrchestrator:
                         if self.streaming_enabled:
                             try:
                                 # 立即同步当前系统的采样帧到PathManager.targets
-                                if len(result) >= 2:
-                                    metrics = result[0]
-                                    system_name_curr = getattr(metrics, 'system_name', 'unknown')
-                                    sampled_frames_curr = getattr(metrics, 'sampled_frames', [])
-                                    for target in path_manager.targets:
-                                        if target.system_name == system_name_curr:
-                                            target.sampled_frames = sampled_frames_curr
-                                            break
+                                self._sync_sampled_frames_to_targets(result, path_manager)
                                 
                                 ResultSaver.save_single_system(
                                     output_dir=self.current_output_dir,
@@ -552,14 +555,7 @@ class AnalysisOrchestrator:
                     if self.streaming_enabled:
                         try:
                             # 立即同步当前系统的采样帧到PathManager.targets
-                            if len(result) >= 2:
-                                metrics = result[0]
-                                system_name_curr = getattr(metrics, 'system_name', 'unknown')
-                                sampled_frames_curr = getattr(metrics, 'sampled_frames', [])
-                                for target in path_manager.targets:
-                                    if target.system_name == system_name_curr:
-                                        target.sampled_frames = sampled_frames_curr
-                                        break
+                            self._sync_sampled_frames_to_targets(result, path_manager)
                             
                             ResultSaver.save_single_system(
                                 output_dir=self.current_output_dir,
