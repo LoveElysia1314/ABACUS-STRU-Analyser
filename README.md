@@ -3,7 +3,10 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+
 高效的 ABACUS 分子动力学轨迹分析工具 / Efficient ABACUS MD Trajectory Analysis Suite
+
+> **2025-09 新特性：体系粒度任务池 + 线程池/进程池调度，极大量体系高效并行，主入口支持 --scheduler 参数切换调度器（推荐 process）**
 
 ---
 
@@ -16,7 +19,7 @@ ABACUS-STRU-Analyser 是专为 ABACUS 分子动力学轨迹设计的高效批量
 - 📊 **多样性指标体系**：ANND、MPD、RMSD、Coverage Ratio、JS Divergence 等
 - 🔗 **相关性分析**：温度、构象与多样性指标的统计相关性分析
 - ⚖️ **采样方法对比**：智能采样 vs. 单次确定性随机采样 (seed=42) vs. 均匀采样
-- 🚀 **批量并行处理**：自动发现多个系统，多进程并行分析
+- 🚀 **批量并行处理**：自动发现多个系统，支持体系粒度任务池，线程池/进程池高效并行（`--scheduler` 可选）
 - 🔥 **断点续算**：程序中断后自动检测进度并续算，避免重复计算
 - 🔄 **即时 DeepMD 导出**：体系完成即导出（ResultSaver 内置），无需额外二次遍历
 - 💾 **流式/实时输出**：所有可确定的单体系与汇总文件即时写入，崩溃后仍可恢复
@@ -32,7 +35,7 @@ ABACUS-STRU-Analyser 是专为 ABACUS 分子动力学轨迹设计的高效批量
 - 📊 **多样性指标**：ANND、MPD、RMSD、Coverage Ratio、JS Divergence 等
 - 🔗 **相关性分析**：温度、构象与多样性指标的统计相关性
 - ⚖️ **采样对比**：智能采样、随机采样、均匀采样多方法性能对比
-- 🚀 **批量并行**：自动发现多个系统，多进程并行分析
+- 🚀 **批量并行**：自动发现多个系统，体系粒度任务池，支持线程池/进程池调度（`--scheduler`）
 - 📁 **参数隔离输出**：输出目录自动按参数组合命名
 - 🔥 **热更新续算**：程序中断后自动检测进度并续算
 - 💾 **流式/增量保存**：边计算边写入（frame_metrics、system_metrics_summary、sampling_compare_enhanced 等），支持实时数据持久化
@@ -85,6 +88,7 @@ python sampling_compare_demo.py
 | --search_path | -s | 当前目录父目录 | 搜索路径 |
 | --include_project | -i | False | 包含项目自身目录 |
 | --force_recompute | -f | False | 强制重算（忽略进度） |
+| --scheduler |  | process | 并行调度器类型（legacy=旧逻辑，process=进程池，thread=线程池，推荐process） |
 | --correlation_analysis | -c | True | 启用相关性分析 |
 | --sampling_comparison | -sc | True | 启用采样方法对比 |
 
@@ -167,17 +171,34 @@ analysis_results/
 
 ## 💡 使用示例
 
-### 基本工作流程
+### 基本用法
 ```bash
-# 1. 主分析
-python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -w 4
+# 分析当前目录（自动进程池并行，推荐）
+python main_abacus_analyser.py
 
-# 2. 相关性分析
+# 指定参数分析（进程池并行）
+python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -w 4 --scheduler process
+
+# 使用线程池并行（适合I/O密集或轻量分析）
+python main_abacus_analyser.py --scheduler thread
+
+# 兼容旧逻辑（不推荐）
+python main_abacus_analyser.py --scheduler legacy
+
+# 相关性分析
 python main_correlation_analyser.py
 
-# 3. 查看结果
-ls analysis_results/run_r0.1_p-0.5_v0.9/
+# 采样方法对比
+python sampling_compare_demo.py
 ```
+# 指定多个搜索路径
+python main_abacus_analyser.py -s /data/exp1 /data/exp2
+
+# 高精度分析
+python main_abacus_analyser.py -r 0.02 -v 0.95
+
+# 快速预览
+python main_abacus_analyser.py -r 0.10 -v 0.85
 
 ### 高级用法
 ```bash
@@ -199,20 +220,12 @@ python main_abacus_analyser.py -sc false
 # 仅进行采样对比
 python main_abacus_analyser.py -c false
 
+# 指定线程池并行
+python main_abacus_analyser.py --scheduler thread -w 8
+
 # 自定义相关性分析输入
 python main_correlation_analyser.py -i custom.csv -o custom_results
 ```
-
-### 断点续算
-```bash
-# 首次运行
-python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90
-
-# 程序中断后继续（自动检测进度）
-python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90
-
-# 强制重新计算所有系统
-python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -f
 ```
 
 ### 采样方法对比
@@ -247,6 +260,8 @@ python sampling_compare_demo.py --result_dir /path/to/analysis_results/run_r0.1_
 ## 📈 更新日志
 
 ### 2025-09
+- ✨ **体系粒度任务池+并行调度重构**：主入口支持 --scheduler 参数，进程池/线程池/旧逻辑三种调度可选，推荐 process，极大量体系高效并行
+- 🛠 **参数解析与主流程缩进修复**：修复参数解析缩进，所有新参数（如 --scheduler）均可正常解析
 - ✨ **DeepMD 导出内聚化**：DeepMD 导出逻辑合并进 ResultSaver 并体系完成即触发
 - ⚡ **全量流式输出**：system_metrics_summary、frame_metrics、mean_structure、采样对比 CSV 均实时写入
 - 🧱 **去除旧增量/批量函数**：移除过时的 save_system_summary_incremental / 完整保存等逻辑
