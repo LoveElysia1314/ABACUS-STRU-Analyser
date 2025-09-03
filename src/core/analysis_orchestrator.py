@@ -14,6 +14,7 @@ from ..utils.common import ErrorHandler
 from ..utils.common import FileUtils
 from ..analysis.correlation_analyser import CorrelationAnalyser
 from .task_scheduler import TaskScheduler, AnalysisTask
+from .process_scheduler import ProcessScheduler, ProcessAnalysisTask
 from ..io.lightweight_discovery import lightweight_discover_systems, load_sampling_reuse_map
 
 
@@ -155,6 +156,45 @@ class AnalysisOrchestrator:
                 self.path_manager.update_sampled_frames_from_results(results)
             except Exception as e:
                 self.logger.warning(f"同步采样帧失败: {e}")
+        return results
+
+    def run_parallel_process(self, search_paths, include_project: bool, max_workers: int = 4):
+        """使用进程池的体系粒度并行（单体系单核）。"""
+        if self.logger is None:
+            raise RuntimeError("必须先初始化组件")
+        import time
+        t0 = time.time()
+        records = lightweight_discover_systems(search_paths, include_project=include_project)
+        self.logger.info(f"轻量发现耗时 {time.time()-t0:.1f}s, 体系={len(records)}")
+        reuse_map = {}
+        if self.path_manager and self.path_manager.targets_file:
+            reuse_map = load_sampling_reuse_map(self.path_manager.targets_file)
+        scheduler = ProcessScheduler(max_workers=max_workers, analyser_params={
+            'sample_ratio': getattr(self.system_analyser, 'sample_ratio', 0.1),
+            'power_p': getattr(self.system_analyser, 'power_p', 0.5),
+            'pca_variance_ratio': getattr(self.system_analyser, 'pca_variance_ratio', 0.90),
+        })
+        reused = 0
+        for rec in records:
+            pre = None
+            if rec.system_name in reuse_map:
+                meta = reuse_map[rec.system_name]
+                if meta.get('source_hash') == rec.source_hash and meta.get('sampled_frames'):
+                    pre = meta.get('sampled_frames')
+                    reused += 1
+            scheduler.add_task(ProcessAnalysisTask(
+                system_path=rec.system_path,
+                system_name=rec.system_name,
+                pre_sampled_frames=pre,
+                pre_stru_files=rec.selected_files,
+            ))
+        self.logger.info(f"进程任务: {len(scheduler.tasks)} (复用 {reused})")
+        results = scheduler.run()
+        if self.path_manager:
+            try:
+                self.path_manager.update_sampled_frames_from_results(results)
+            except Exception as e:  # noqa
+                self.logger.warning(f"更新采样帧失败: {e}")
         return results
 
     def cleanup(self):
