@@ -200,7 +200,7 @@ class StrUParser:
             return current_element, element_atoms_count, element_atoms_collected
         return None
 
-    def parse_trajectory(self, stru_dir: str, pre_files: List[str] | None = None) -> List[FrameData]:
+    def parse_trajectory(self, stru_dir: str, pre_files: Optional[List[str]] = None) -> List[FrameData]:
         """解析轨迹。
 
         Args:
