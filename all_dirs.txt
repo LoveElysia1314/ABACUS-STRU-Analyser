@@ -1,0 +1,16 @@
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\analysis_results
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\analysis_results\run_r0.1_p-0.5_v0.9
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\analysis_results\run_r0.1_p-0.5_v0.9\combined_analysis_results
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\analysis_results\run_r0.1_p-0.5_v0.9\single_analysis_results
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\analysis
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\core
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\io
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\utils
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\__pycache__
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\analysis\sampling_comparison
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\analysis\__pycache__
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\analysis\sampling_comparison\__pycache__
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\core\__pycache__
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\io\__pycache__
+D:\drzqr\Documents\GitHub\ABACUS-STRU-Analyser\src\utils\__pycache__

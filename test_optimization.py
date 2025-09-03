@@ -75,7 +75,7 @@ def test_discovery_performance(search_paths, use_streaming=False, use_cache=True
     else:
         print("\n开始传统加载测试...")
         start_load = time.time()
-        path_manager.load_from_discovery(all_mol_systems, use_cache=use_cache)
+        path_manager.load_from_discovery(search_paths, use_cache=use_cache)
         total_load_time = time.time() - start_load
         print(f"传统加载完成: {len(path_manager.targets)} 个目标, 耗时 {total_load_time:.2f}s")
     

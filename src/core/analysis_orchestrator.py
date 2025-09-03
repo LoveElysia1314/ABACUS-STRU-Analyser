@@ -15,7 +15,7 @@ from ..utils.common import FileUtils
 from ..analysis.correlation_analyser import CorrelationAnalyser
 from .task_scheduler import TaskScheduler, AnalysisTask
 from .process_scheduler import ProcessScheduler, ProcessAnalysisTask
-from ..io.lightweight_discovery import lightweight_discover_systems, load_sampling_reuse_map
+from ..io.path_manager import lightweight_discover_systems, load_sampling_reuse_map
 
 
 class AnalysisOrchestrator:

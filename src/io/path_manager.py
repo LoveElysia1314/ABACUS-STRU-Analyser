@@ -5,11 +5,115 @@ import hashlib
 import json
 import logging
 import os
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..utils.common import FileUtils
+
+
+SYSTEM_DIR_PATTERN = re.compile(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K$")
+
+
+@dataclass
+class LightweightSystemRecord:
+    system_path: str
+    mol_id: str
+    conf: str
+    temperature: str
+    stru_dir: str
+    frame_count: int
+    max_frame_id: int
+    source_hash: str  # 基于最大帧文件名字/编号/大小/mtime
+    md_dumpfreq: int = 1
+    selected_files: Optional[List[str]] = None  # 经过 md_dumpfreq 筛选的文件绝对路径（升序）
+    sampled_frames: Optional[List[int]] = None  # 可能被后续调度器填充
+
+    @property
+    def system_name(self) -> str:
+        return f"struct_mol_{self.mol_id}_conf_{self.conf}_T{self.temperature}K"
+
+    @property
+    def key(self) -> str:
+        return f"{self.mol_id}:{self.conf}:{self.temperature}"
+
+
+def lightweight_discover_systems(search_paths: List[str], include_project: bool = False) -> List[LightweightSystemRecord]:
+    """只做目录级扫描，匹配所有 struct_*_conf_*_T*K/OUT.ABACUS/STRU 目录，
+    对于重复体系，选择创建时间最晚的。其余分析交由主流程完成。"""
+    dedup_map: Dict[str, LightweightSystemRecord] = {}
+    stru_dirs = []
+    total_dirs = 0
+    sampling_ratio = 0.1
+    n_workers = 20
+    # 分层扫描：先找体系目录，再判断STRU
+    for base in search_paths:
+        if not base:
+            continue
+        base_abs = os.path.abspath(base)
+        pattern = os.path.join(base_abs, 'struct_mol_*_conf_*_T*K')
+        for sys_dir in glob.glob(pattern):
+            stru_dir = os.path.join(sys_dir, 'OUT.ABACUS', 'STRU')
+            if os.path.isdir(stru_dir):
+                stru_dirs.append(stru_dir)
+    total_dirs = len(stru_dirs)
+
+    def get_record(stru_dir):
+        parent = os.path.dirname(os.path.dirname(stru_dir))
+        dir_name = os.path.basename(parent)
+        m = SYSTEM_DIR_PATTERN.match(dir_name)
+        if not m:
+            return None
+        mol_id, conf, temp = m.groups()
+        try:
+            ctime = os.path.getctime(stru_dir)
+        except Exception:
+            ctime = 0
+        
+        # 计算source_hash
+        source_hash = ""
+        try:
+            # 使用PathManager的source_hash计算方法
+            pm = PathManager()
+            source_hash = pm._calculate_source_hash(parent)
+        except Exception:
+            pass
+        
+        record = LightweightSystemRecord(
+            system_path=parent,
+            mol_id=mol_id,
+            conf=conf,
+            temperature=temp,
+            stru_dir=stru_dir,
+            frame_count=0,
+            max_frame_id=0,
+            source_hash=source_hash,
+            md_dumpfreq=1,
+            selected_files=None,
+            sampled_frames=None
+        )
+        record.ctime = ctime
+        return (f"{mol_id}:{conf}:{temp}", record)
+
+    # 并行获取ctime和生成record
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = [executor.submit(get_record, d) for d in stru_dirs]
+        for fut in as_completed(futures):
+            res = fut.result()
+            if res is None:
+                continue
+            key, record = res
+            prev = dedup_map.get(key)
+            if prev is None or record.ctime > getattr(prev, 'ctime', 0):
+                dedup_map[key] = record
+
+    records = list(dedup_map.values())
+    records.sort(key=lambda r: -getattr(r, 'ctime', 0))
+    logger = logging.getLogger(__name__)
+    logger.info(f"Lightweight discovery 完成: 去重后 {len(records)} 个体系 (扫描目录 {total_dirs})")
+    return records
 
 
 
@@ -200,86 +304,67 @@ class PathManager:
             return False
 
     def load_from_discovery(
-        self, mol_systems: Dict[str, List[str]], preserve_existing: bool = False
+        self, search_paths: List[str], preserve_existing: bool = False
     ) -> None:
         """从发现结果加载分析目标
 
         Args:
-                mol_systems: 发现的分子系统字典
+                search_paths: 搜索路径列表
                 preserve_existing: 是否保留已有的状态信息
         """
+        # 使用高效的轻量发现
+        records = lightweight_discover_systems(search_paths)
 
         self.targets.clear()
         self.mol_groups.clear()
         total_targets = 0
-        processed_molecules = 0
 
-        for mol_id, system_paths in mol_systems.items():
-            processed_molecules += 1
-            if processed_molecules % 50 == 0:
-                self.logger.info(
-                    f"处理分子进度: {processed_molecules}/{len(mol_systems)}"
-                )
+        for record in records:
+            # 获取STRU文件列表
+            stru_files = glob.glob(os.path.join(record.stru_dir, "STRU_MD_*"))
+            if not stru_files:
+                self.logger.warning(f"系统 {record.system_name} 没有找到 STRU_MD 文件")
+                continue
 
-            targets_for_mol = []
-            for system_path in system_paths:
-                basename = os.path.basename(system_path)
-                import re
-
-                match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", basename)
-                if not match:
-                    self.logger.warning(f"无法解析系统路径: {system_path}")
-                    continue
-                mol_id_parsed, conf, temp = match.groups()
-                stru_dir = os.path.join(system_path, "OUT.ABACUS", "STRU")
-                stru_files = glob.glob(os.path.join(stru_dir, "STRU_MD_*"))
+            # 应用md_dumpfreq筛选
+            md_dumpfreq = 1  # 默认值
+            try:
+                from .stru_parser import StrUParser
+                parser = StrUParser()
+                input_file = os.path.join(record.system_path, "OUT.ABACUS", "INPUT")
+                md_dumpfreq = parser.parse_md_dumpfreq(input_file)
+                original_count = len(stru_files)
+                stru_files = parser.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
                 if not stru_files:
-                    self.logger.warning(f"系统 {basename} 没有找到 STRU_MD 文件")
+                    self.logger.warning(
+                        f"系统 {record.system_name} 依据 md_dumpfreq={md_dumpfreq} 过滤后无可用帧 (原始 {original_count} 帧)"
+                    )
                     continue
-                # --- 新增: 基于 INPUT 中 md_dumpfreq 选择帧 ---
-                md_dumpfreq = 1  # 默认值
-                try:
-                    from .stru_parser import StrUParser
+                if len(stru_files) != original_count:
+                    self.logger.info(
+                        f"系统 {record.system_name}: 按 md_dumpfreq={md_dumpfreq} 筛选 {len(stru_files)}/{original_count} 帧 (包含0帧)"
+                    )
+            except Exception as e:
+                self.logger.warning(f"系统 {record.system_name} 应用 md_dumpfreq 筛选失败，使用所有帧: {e}")
 
-                    parser = StrUParser()
-                    input_file = os.path.join(system_path, "OUT.ABACUS", "INPUT")
-                    md_dumpfreq = parser.parse_md_dumpfreq(input_file)
-                    original_count = len(stru_files)
-                    stru_files = parser.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
-                    if not stru_files:
-                        self.logger.warning(
-                            f"系统 {basename} 依据 md_dumpfreq={md_dumpfreq} 过滤后无可用帧 (原始 {original_count} 帧)"
-                        )
-                        continue
-                    if len(stru_files) != original_count:
-                        self.logger.info(
-                            f"系统 {basename}: 按 md_dumpfreq={md_dumpfreq} 筛选 {len(stru_files)}/{original_count} 帧 (包含0帧)"
-                        )
-                except Exception as e:
-                    self.logger.warning(f"系统 {basename} 应用 md_dumpfreq 筛选失败，使用所有帧: {e}")
-                try:
-                    creation_time = os.path.getctime(system_path)
-                except OSError:
-                    creation_time = 0.0
+            # 计算源文件哈希
+            source_hash = self._calculate_source_hash(record.system_path)
 
-                # 计算源文件哈希
-                source_hash = self._calculate_source_hash(system_path)
+            target = AnalysisTarget(
+                system_path=record.system_path,
+                mol_id=record.mol_id,
+                conf=record.conf,
+                temperature=record.temperature,
+                stru_files=stru_files,
+                creation_time=getattr(record, 'ctime', 0),
+                source_hash=source_hash,
+                md_dumpfreq=md_dumpfreq,
+            )
+            self.targets.append(target)
+            total_targets += 1
 
-                target = AnalysisTarget(
-                    system_path=system_path,
-                    mol_id=mol_id_parsed,
-                    conf=conf,
-                    temperature=temp,
-                    stru_files=stru_files,
-                    creation_time=creation_time,
-                    source_hash=source_hash,
-                    md_dumpfreq=md_dumpfreq,
-                )
-                self.targets.append(target)
-                targets_for_mol.append(target)
-                total_targets += 1
-            if targets_for_mol:
-                self.mol_groups[mol_id] = targets_for_mol
+        # 按mol_id分组
+        self._rebuild_mol_groups()
 
         self.logger.info(
             f"PathManager loaded {len(self.mol_groups)} molecules with {total_targets} targets"
@@ -760,3 +845,38 @@ class PathManager:
                 self.logger.debug(f"更新采样帧: {target.system_name} ({len(target.sampled_frames)} 帧)")
                 
         self.logger.info(f"从分析结果同步采样帧信息: {updated_count} 个系统")
+
+
+def load_sampling_reuse_map(targets_file: str) -> Dict[str, Dict[str, object]]:
+    """读取已有 analysis_targets.json，构建复用映射。
+
+    Returns:
+        dict: system_name -> { 'sampled_frames': List[int], 'source_hash': str }
+    """
+    reuse = {}
+    if not targets_file or not os.path.exists(targets_file):
+        return reuse
+    try:
+        with open(targets_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        molecules = data.get('molecules', {})
+        for mol in molecules.values():
+            for sys_name, sys_data in mol.get('systems', {}).items():
+                sampled_raw = sys_data.get('sampled_frames')
+                if isinstance(sampled_raw, str):
+                    try:
+                        import json as _json
+                        sampled_frames = _json.loads(sampled_raw)
+                    except Exception:
+                        sampled_frames = []
+                else:
+                    sampled_frames = sampled_raw or []
+                reuse[sys_name] = {
+                    'sampled_frames': sampled_frames,
+                    'source_hash': sys_data.get('source_hash', ''),
+                    'system_path': sys_data.get('system_path', ''),
+                }
+    except Exception as e:
+        logger = logging.getLogger('src.io.path_manager')
+        logger.warning(f"读取采样复用信息失败: {e}")
+    return reuse

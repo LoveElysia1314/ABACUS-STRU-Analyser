@@ -20,13 +20,12 @@ from enum import Enum
 
 # 导入自定义模块
 from src.utils.logmanager import LoggerManager
-from src.io.path_manager import PathManager
+from src.io.path_manager import PathManager, load_sampling_reuse_map, lightweight_discover_systems
 from src.core.system_analyser import SystemAnalyser
 from src.io.result_saver import ResultSaver
 from src.utils.common import ErrorHandler
 from src.utils.common import FileUtils
 from src.analysis.sampling_comparison.streaming_compare import StreamingSamplingComparisonManager
-from src.io.lightweight_discovery import lightweight_discover_systems, load_sampling_reuse_map
 from src.core.process_scheduler import ProcessScheduler, ProcessAnalysisTask
 
 # 采样效果评估（采样对比）
@@ -291,7 +290,7 @@ class AnalysisOrchestrator:
         self.logger.info(f"使用参数专用目录: {actual_output_dir}")
         return path_manager, actual_output_dir
     
-    def setup_analysis_targets(self, path_manager: PathManager, mol_systems: dict) -> bool:
+    def setup_analysis_targets(self, path_manager: PathManager, search_paths: List[str]) -> bool:
         """设置分析目标，返回是否可以使用现有结果"""
         current_analysis_params = {
             'sample_ratio': self.config.sample_ratio,
@@ -313,7 +312,7 @@ class AnalysisOrchestrator:
             self.logger.info("未找到已有的分析目标文件，将创建新的")
         
         # 加载发现结果并去重
-        path_manager.load_from_discovery(mol_systems, preserve_existing=loaded_existing)
+        path_manager.load_from_discovery(search_paths, preserve_existing=loaded_existing)
         path_manager.deduplicate_targets()
         
         # 参数兼容性检查
@@ -889,7 +888,7 @@ class MainApp:
                 self.orchestrator.logger.error("未找到符合格式的系统目录")
                 return
             path_manager, actual_output_dir = self.orchestrator.setup_output_directory()
-            has_existing_results = self.orchestrator.setup_analysis_targets(path_manager, mol_systems)
+            has_existing_results = self.orchestrator.setup_analysis_targets(path_manager, search_paths)
             if has_existing_results and config.mode == AnalysisMode.FULL_ANALYSIS:
                 self.orchestrator.logger.info("发现完整的分析结果，直接执行后续分析")
                 self.orchestrator.run_post_analysis()
@@ -918,7 +917,7 @@ class MainApp:
         mol_systems: Dict[str, List[str]] = {}
         for rec in records:
             mol_systems.setdefault(rec.mol_id, []).append(rec.system_path)
-        path_manager.load_from_discovery(mol_systems, preserve_existing=False)
+        path_manager.load_from_discovery(search_paths, preserve_existing=False)
         path_manager.deduplicate_targets()
         # 采样复用 map
         reuse_map_raw = {}
