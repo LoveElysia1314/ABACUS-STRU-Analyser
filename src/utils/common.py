@@ -333,6 +333,47 @@ class DataUtils:
 # ---- File Operation Utilities (merged from file_utils.py) ----
 
 class FileUtils:
+    @staticmethod
+    def atomic_write(filepath: str, data: str, encoding: str = "utf-8") -> bool:
+        """原子写入文本数据到文件，先写临时文件再替换，防止中断损坏"""
+        import tempfile
+        import os
+        try:
+            dirpath = os.path.dirname(filepath)
+            FileUtils.ensure_dir(dirpath)
+            with tempfile.NamedTemporaryFile('w', delete=False, dir=dirpath, encoding=encoding) as tf:
+                tf.write(data)
+                tempname = tf.name
+            os.replace(tempname, filepath)
+            return True
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Atomic write failed for {filepath}: {e}")
+            return False
+
+    @staticmethod
+    def safe_write_json(filepath: str, obj: Any, encoding: str = "utf-8", indent: int = 2) -> bool:
+        """安全写入JSON文件，原子写入，异常捕获"""
+        import json
+        try:
+            data = json.dumps(obj, ensure_ascii=False, indent=indent)
+            return FileUtils.atomic_write(filepath, data, encoding=encoding)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to write JSON file {filepath}: {e}")
+            return False
+
+    @staticmethod
+    def safe_read_json(filepath: str, encoding: str = "utf-8") -> Optional[Any]:
+        """安全读取JSON文件，异常捕获"""
+        import json
+        try:
+            with open(filepath, 'r', encoding=encoding) as f:
+                return json.load(f)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to read JSON file {filepath}: {e}")
+            return None
     """File and directory operation utilities"""
 
     @staticmethod

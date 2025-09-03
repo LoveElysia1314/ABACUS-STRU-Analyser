@@ -45,13 +45,12 @@ class ResultSaver:
         if not os.path.exists(progress_path):
             return {'processed_systems': [], 'last_updated': None}
             
-        try:
-            import json
-            with open(progress_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
+        data = FileUtils.safe_read_json(progress_path, encoding='utf-8')
+        if data is not None:
+            return data
+        else:
             logger = logging.getLogger(__name__)
-            logger.warning(f"加载进度文件失败: {e}")
+            logger.warning(f"加载进度文件失败: {progress_path}")
             return {'processed_systems': [], 'last_updated': None}
 
     @staticmethod
@@ -159,10 +158,7 @@ class ResultSaver:
         if system_name not in data.get('processed_systems', []):
             data['processed_systems'].append(system_name)
         data['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-        tmp = progress_path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, progress_path)
+        FileUtils.safe_write_json(progress_path, data, encoding='utf-8', indent=2)
 
     @staticmethod
     def append_system_summary_rows(output_dir: str, metrics_list: Iterable) -> None:
@@ -172,59 +168,48 @@ class ResultSaver:
         combined_dir = os.path.join(output_dir, 'combined_analysis_results')
         FileUtils.ensure_dir(combined_dir)
         csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
-        file_exists = os.path.exists(csv_path)
-        try:
-            with open(csv_path, 'a' if file_exists else 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(ResultSaver.SYSTEM_SUMMARY_HEADERS)
-                for m in metrics_list:
-                    try:
-                        row = ResultSaver._format_metric_row(m)
-                        writer.writerow(row)
-                    except Exception as rexc:
-                        logging.getLogger(__name__).warning(f"写入单行失败 {getattr(m,'system_name','?')}: {rexc}")
-                f.flush()
-                os.fsync(f.fileno())
-        except Exception as e:
-            logging.getLogger(__name__).error(f"追加 system_metrics_summary 失败: {e}")
+        # 读取原有内容
+        rows = []
+        if os.path.exists(csv_path):
+            old = FileUtils.safe_read_csv(csv_path, encoding='utf-8')
+            if old:
+                rows.extend(old)
+        # 追加新内容
+        for m in metrics_list:
+            try:
+                row = ResultSaver._format_metric_row(m)
+                rows.append(row)
+            except Exception as rexc:
+                logging.getLogger(__name__).warning(f"写入单行失败 {getattr(m,'system_name','?')}: {rexc}")
+        # 写回（原子写入）
+        FileUtils.safe_write_csv(csv_path, rows, headers=ResultSaver.SYSTEM_SUMMARY_HEADERS, encoding='utf-8-sig')
 
     @staticmethod
     def reorder_system_summary(output_dir: str) -> None:
         """读取当前 system_metrics_summary.csv 重新排序并原子覆盖。
-    仅基于 system_name 中的 mol/conf/温度数值排序。
+        仅基于 system_name 中的 mol/conf/温度数值排序。
         """
         combined_dir = os.path.join(output_dir, 'combined_analysis_results')
         csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
         if not os.path.exists(csv_path):
             return
-        try:
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                reader = list(csv.reader(f))
-            if not reader:
-                return
-            header = reader[0]
-            rows = reader[1:]
-            def sort_key(row):
-                try:
-                    system_name = row[0]
-                    match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
-                    if match:
-                        mol_id, conf, temp = match.groups()
-                        return (int(mol_id), int(conf), int(temp))
-                except Exception:
-                    pass
-                return (999999, 999999, 999999)
-            rows.sort(key=sort_key)
-            tmp = csv_path + '.tmp'
-            with open(tmp, 'w', newline='', encoding='utf-8') as f:
-                w = csv.writer(f)
-                w.writerow(header)
-                w.writerows(rows)
-            os.replace(tmp, csv_path)
-            logging.getLogger(__name__).info("system_metrics_summary.csv 已重新排序")
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"system_metrics_summary 排序失败(忽略): {e}")
+        rows = FileUtils.safe_read_csv(csv_path, encoding='utf-8')
+        if not rows or len(rows) < 2:
+            return
+        header, data_rows = rows[0], rows[1:]
+        def sort_key(row):
+            try:
+                system_name = row[0]
+                match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
+                if match:
+                    mol_id, conf, temp = match.groups()
+                    return (int(mol_id), int(conf), int(temp))
+            except Exception:
+                pass
+            return (999999, 999999, 999999)
+        data_rows.sort(key=sort_key)
+        FileUtils.safe_write_csv(csv_path, [header] + data_rows, headers=None, encoding='utf-8-sig')
+        logging.getLogger(__name__).info("system_metrics_summary.csv 已重新排序")
 
     # 已移除旧的完整/增量系统汇总保存函数，统一使用 append + reorder 机制
 
@@ -247,73 +232,47 @@ class ResultSaver:
         FileUtils.ensure_dir(single_analysis_dir)
         csv_path = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
 
-        try:
-            file_exists = os.path.exists(csv_path)
-            write_mode = 'a' if incremental and file_exists else 'w'
-            
-            with open(csv_path, write_mode, newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                
-                # 只有在创建新文件或非增量模式时写入表头
-                if not file_exists or not incremental:
-                    # 准备表头
-                    headers = ["Frame_ID", "Selected"]
-                    headers.append("RMSD")  # 基于构象均值的RMSD
-                    # 能量补充信息（放在后面）
-                    headers.append("Energy(eV)")
-                    headers.append("Energy_Standardized")
-                    if pca_components_data:
-                        # 获取所有可能的PC列
-                        max_pc = 0
-                        for item in pca_components_data:
-                            for key in item.keys():
-                                if key.startswith('PC'):
-                                    pc_num = int(key[2:])
-                                    max_pc = max(max_pc, pc_num)
-                        headers.extend([f"PC{i}" for i in range(1, max_pc + 1)])
-                    writer.writerow(headers)
+        # 构建表头
+        headers = ["Frame_ID", "Selected", "RMSD", "Energy(eV)", "Energy_Standardized"]
+        max_pc = 0
+        if pca_components_data:
+            for item in pca_components_data:
+                for key in item.keys():
+                    if key.startswith('PC'):
+                        pc_num = int(key[2:])
+                        max_pc = max(max_pc, pc_num)
+            headers.extend([f"PC{i}" for i in range(1, max_pc + 1)])
 
-                sampled_set = set(sampled_frames)
+        sampled_set = set(sampled_frames)
+        pca_lookup = {}
+        if pca_components_data:
+            for item in pca_components_data:
+                frame_id = item.get('frame')
+                if frame_id is not None:
+                    pca_lookup[frame_id] = item
 
-                # 创建PCA数据查找字典
-                pca_lookup = {}
-                if pca_components_data:
-                    for item in pca_components_data:
-                        frame_id = item.get('frame')
-                        if frame_id is not None:
-                            pca_lookup[frame_id] = item
+        rows = []
+        for i, frame in enumerate(frames):
+            selected = 1 if frame.frame_id in sampled_set else 0
+            row = [frame.frame_id, selected]
+            rmsd_value = rmsd_per_frame[i] if rmsd_per_frame and i < len(rmsd_per_frame) else ""
+            row.append(f"{rmsd_value:.6f}" if isinstance(rmsd_value, (int, float)) else rmsd_value)
+            energy = frame.energy if frame.energy is not None else ""
+            energy_standardized = frame.energy_standardized if frame.energy_standardized is not None else ""
+            row.append(energy)
+            row.append(energy_standardized)
+            if pca_components_data and frame.frame_id in pca_lookup:
+                pca_item = pca_lookup[frame.frame_id]
+                for pc_num in range(1, max_pc + 1):
+                    pc_key = f'PC{pc_num}'
+                    pc_value = pca_item.get(pc_key, 0.0)
+                    row.append(f"{pc_value:.6f}")
+            elif pca_components_data:
+                for pc_num in range(1, max_pc + 1):
+                    row.append("0.000000")
+            rows.append(row)
 
-                for i, frame in enumerate(frames):
-                    selected = 1 if frame.frame_id in sampled_set else 0
-                    row = [frame.frame_id, selected]
-                    # RMSD数据
-                    rmsd_value = rmsd_per_frame[i] if rmsd_per_frame and i < len(rmsd_per_frame) else ""
-                    row.append(f"{rmsd_value:.6f}" if isinstance(rmsd_value, (int, float)) else rmsd_value)
-                    # 能量补充 - 直接使用FrameData中的信息
-                    energy = frame.energy if frame.energy is not None else ""
-                    energy_standardized = frame.energy_standardized if frame.energy_standardized is not None else ""
-                    row.append(energy)
-                    row.append(energy_standardized)
-                    # 添加PCA分量（放在后面）
-                    if pca_components_data and frame.frame_id in pca_lookup:
-                        pca_item = pca_lookup[frame.frame_id]
-                        for pc_num in range(1, max_pc + 1):
-                            pc_key = f'PC{pc_num}'
-                            pc_value = pca_item.get(pc_key, 0.0)
-                            row.append(f"{pc_value:.6f}")
-                    elif pca_components_data:
-                        for pc_num in range(1, max_pc + 1):
-                            row.append("0.000000")
-                    writer.writerow(row)
-                    
-                # 确保数据写入磁盘
-                f.flush()
-                os.fsync(f.fileno())
-                
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to save frame metrics for {system_name}: {e}")
-            raise
+        FileUtils.safe_write_csv(csv_path, rows, headers=headers, encoding='utf-8-sig')
 
     # 旧增量与采样记录聚合函数已移除
 
