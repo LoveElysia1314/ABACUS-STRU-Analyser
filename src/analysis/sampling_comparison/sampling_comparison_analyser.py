@@ -336,16 +336,33 @@ class SamplingComparisonAnalyser:
         self.logger.info(f"增强版采样对比结果已保存到 {out_path}")
 
     def _create_summary_table(self, rows, result_dir):
-        """创建汇总表格"""
-        if not rows:
-            self.logger.warning("没有数据行，无法创建汇总表格")
+        """创建汇总表格（自动读取三种采样类型缓存并合并）"""
+        import pandas as pd
+        import numpy as np
+        import os
+        cache_dir = os.path.join(result_dir, 'sampling_comparison_cache')
+        sampled_path = os.path.join(cache_dir, 'sampled.csv')
+        random_path = os.path.join(cache_dir, 'random.csv')
+        uniform_path = os.path.join(cache_dir, 'uniform.csv')
+
+        if not (os.path.exists(sampled_path) and os.path.exists(random_path) and os.path.exists(uniform_path)):
+            self.logger.warning("三种采样类型缓存文件不全，无法生成汇总表格")
             return
 
-        # 定义汇总指标
+        df_sampled = pd.read_csv(sampled_path)
+        df_random = pd.read_csv(random_path)
+        df_uniform = pd.read_csv(uniform_path)
+
+        # 合并三表，按System字段
+        df_merged = df_sampled.merge(df_random, on="System", suffixes=("_sampled", "_random"))
+        # uniform后缀需手动加
+        df_uniform = df_uniform.add_suffix("_uniform")
+        df_uniform = df_uniform.rename(columns={"System_uniform": "System"})
+        df_merged = df_merged.merge(df_uniform, on="System", how="left")
+
         ordered = ["RMSD_Mean", "ANND", "MPD", "Coverage_Ratio", "Energy_Range", "JS_Divergence"]
         metrics_to_summarize = []
         for m in ordered:
-            # 随机列现在直接是 <Metric>_random
             metrics_to_summarize.append((
                 m,
                 f"{m}_sampled",
@@ -353,23 +370,13 @@ class SamplingComparisonAnalyser:
                 f"{m}_uniform"
             ))
 
-        self.logger.info(f"开始处理 {len(rows)} 个系统的数据...")
+        self.logger.info(f"开始处理 {len(df_merged)} 个系统的数据...")
 
-        # 计算汇总统计
-        summary_rows = []
-        for row in rows:
-            summary_rows.append({
-                'System': row.get('System', ''),
-                **{k: row.get(k, np.nan) for _, k, r, u in metrics_to_summarize for k in [k, r, u]}
-            })
-
-        summary_df_per_system = pd.DataFrame(summary_rows)
         summary_rows_final = []
-
         for metric_name, sampled_col, random_col, uniform_col in metrics_to_summarize:
-            sampled_means = summary_df_per_system[sampled_col].values
-            random_means = summary_df_per_system[random_col].values
-            uniform_means = summary_df_per_system[uniform_col].values
+            sampled_means = df_merged[sampled_col].values
+            random_means = df_merged[random_col].values
+            uniform_means = df_merged[uniform_col].values
 
             # 过滤NaN值
             sampled_means = sampled_means[~np.isnan(sampled_means)]
@@ -381,7 +388,7 @@ class SamplingComparisonAnalyser:
                 'Sampled_Mean': np.mean(sampled_means) if len(sampled_means) > 0 else np.nan,
                 'Sampled_Std': np.std(sampled_means, ddof=1) if len(sampled_means) >= 2 else np.nan,
                 'Random_Mean': np.mean(random_means) if len(random_means) > 0 else np.nan,
-                'Random_Std': np.nan,  # 单次随机，无标准差
+                'Random_Std': np.std(random_means, ddof=1) if len(random_means) >= 2 else np.nan,
                 'Uniform_Mean': np.mean(uniform_means) if len(uniform_means) > 0 else np.nan,
                 'Uniform_Std': np.std(uniform_means, ddof=1) if len(uniform_means) >= 2 else np.nan,
             })
@@ -395,7 +402,7 @@ class SamplingComparisonAnalyser:
         summary_path = os.path.join(combined_dir, 'sampling_methods_comparison.csv')
         summary_df.to_csv(summary_path, index=False)
         self.logger.info(f"均值对比汇总表格已保存到 {summary_path}")
-        self.logger.info(f"汇总了 {len(rows)} 个系统的数据")
+        self.logger.info(f"汇总了 {len(df_merged)} 个系统的数据")
 
     def _calculate_group_rmsd(self, system_path: str, frame_indices: List[int]) -> np.ndarray:
         return RMSDCalculator.calculate_group_rmsd(system_path, frame_indices, self.logger)
