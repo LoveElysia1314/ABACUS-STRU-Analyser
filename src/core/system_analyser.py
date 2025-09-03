@@ -258,7 +258,7 @@ class SystemAnalyser:
         self.pca_reducer = PCAReducer(pca_variance_ratio)
         self.logger = logging.getLogger(__name__)
 
-    def analyse_system(self, system_dir: str, pre_sampled_frames: Optional[List[int]] = None) -> Optional[Tuple]:
+    def analyse_system(self, system_dir: str, pre_sampled_frames: Optional[List[int]] = None, pre_stru_files: Optional[List[str]] = None) -> Optional[Tuple]:
         system_info = self._extract_system_info(system_dir)
         if not system_info:
             return None
@@ -267,7 +267,7 @@ class SystemAnalyser:
         if not os.path.exists(stru_dir):
             self.logger.warning(f"STRU目录不存在: {stru_dir}")
             return None
-        frames = self.parser.parse_trajectory(stru_dir)
+        frames = self.parser.parse_trajectory(stru_dir, pre_files=pre_stru_files)
         if ValidationUtils.is_empty(frames):
             self.logger.warning(f"未找到有效轨迹数据: {system_dir}")
             return None

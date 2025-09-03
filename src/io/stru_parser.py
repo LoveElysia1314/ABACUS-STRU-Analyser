@@ -200,28 +200,37 @@ class StrUParser:
             return current_element, element_atoms_count, element_atoms_collected
         return None
 
-    def parse_trajectory(self, stru_dir: str) -> List[FrameData]:
-        stru_files = glob.glob(os.path.join(stru_dir, "STRU_MD_*"))
-        if not stru_files:
-            self.logger.warning(f"No STRU_MD_* files in {stru_dir}")
-            return []
-        # 基于 INPUT 中的 md_dumpfreq 进行筛选，保持与 PathManager 一致
-        try:
-            input_file = os.path.abspath(os.path.join(stru_dir, os.pardir, "INPUT"))
-            md_dumpfreq = self.parse_md_dumpfreq(input_file)
-            original = len(stru_files)
-            stru_files = self.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
+    def parse_trajectory(self, stru_dir: str, pre_files: List[str] | None = None) -> List[FrameData]:
+        """解析轨迹。
+
+        Args:
+            stru_dir: STRU 目录
+            pre_files: 可选，已过滤好的 STRU 文件路径列表（绝对路径）。提供后将跳过 glob 与 md_dumpfreq 过滤。
+        """
+        if pre_files is not None:
+            stru_files = list(pre_files)
+        else:
+            stru_files = glob.glob(os.path.join(stru_dir, "STRU_MD_*"))
             if not stru_files:
-                self.logger.warning(
-                    f"After applying md_dumpfreq={md_dumpfreq} filter, no STRU frames remain in {stru_dir} (original {original})"
-                )
+                self.logger.warning(f"No STRU_MD_* files in {stru_dir}")
                 return []
-            if len(stru_files) != original:
-                self.logger.info(
-                    f"Filtered STRU frames by md_dumpfreq={md_dumpfreq}: {len(stru_files)}/{original} retained (including 0)"
-                )
-        except Exception as e:
-            self.logger.warning(f"Failed to apply md_dumpfreq filtering, using all frames: {e}")
+            # 基于 INPUT 中的 md_dumpfreq 进行筛选，保持与 PathManager 一致
+            try:
+                input_file = os.path.abspath(os.path.join(stru_dir, os.pardir, "INPUT"))
+                md_dumpfreq = self.parse_md_dumpfreq(input_file)
+                original = len(stru_files)
+                stru_files = self.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
+                if not stru_files:
+                    self.logger.warning(
+                        f"After applying md_dumpfreq={md_dumpfreq} filter, no STRU frames remain in {stru_dir} (original {original})"
+                    )
+                    return []
+                if len(stru_files) != original:
+                    self.logger.info(
+                        f"Filtered STRU frames by md_dumpfreq={md_dumpfreq}: {len(stru_files)}/{original} retained (including 0)"
+                    )
+            except Exception as e:
+                self.logger.warning(f"Failed to apply md_dumpfreq filtering, using all frames: {e}")
         frames = []
         for stru_file in stru_files:
             match = re.search(r"STRU_MD_(\d+)", os.path.basename(stru_file))
