@@ -917,7 +917,7 @@ class MainApp:
         mol_systems: Dict[str, List[str]] = {}
         for rec in records:
             mol_systems.setdefault(rec.mol_id, []).append(rec.system_path)
-        path_manager.load_from_discovery(search_paths, preserve_existing=False)
+        path_manager.load_from_discovery(records, preserve_existing=False)
         path_manager.deduplicate_targets()
         # 采样复用 map
         reuse_map_raw = {}

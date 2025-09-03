@@ -304,16 +304,21 @@ class PathManager:
             return False
 
     def load_from_discovery(
-        self, search_paths: List[str], preserve_existing: bool = False
+        self, records_or_paths, preserve_existing: bool = False
     ) -> None:
         """从发现结果加载分析目标
 
         Args:
-                search_paths: 搜索路径列表
+                records_or_paths: LightweightSystemRecord列表或搜索路径列表
                 preserve_existing: 是否保留已有的状态信息
         """
-        # 使用高效的轻量发现
-        records = lightweight_discover_systems(search_paths)
+        # 判断传入的是records还是search_paths
+        if records_or_paths and hasattr(records_or_paths[0], 'system_path'):
+            # 传入的是records
+            records = records_or_paths
+        else:
+            # 传入的是search_paths，需要发现
+            records = lightweight_discover_systems(records_or_paths)
 
         self.targets.clear()
         self.mol_groups.clear()
@@ -347,8 +352,8 @@ class PathManager:
             except Exception as e:
                 self.logger.warning(f"系统 {record.system_name} 应用 md_dumpfreq 筛选失败，使用所有帧: {e}")
 
-            # 计算源文件哈希
-            source_hash = self._calculate_source_hash(record.system_path)
+            # 使用已计算的源文件哈希，避免重复计算
+            source_hash = record.source_hash or self._calculate_source_hash(record.system_path)
 
             target = AnalysisTarget(
                 system_path=record.system_path,
