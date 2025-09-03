@@ -29,10 +29,17 @@ from src.utils.common import FileUtils
 from src.core.process_scheduler import ProcessScheduler, ProcessAnalysisTask
 
 
+class AnalysisStep(Enum):
+    """分析步骤枚举"""
+    SAMPLING = 1         # 采样
+    DEEPMD = 2          # DeepMD导出
+    SAMPLING_COMPARE = 3 # 采样效果对比
+
+
 class AnalysisMode(Enum):
-    """分析模式枚举"""
-    SAMPLING_ONLY = "sampling_only"  # 仅采样模式
+    """分析模式枚举（向后兼容）"""
     FULL_ANALYSIS = "full_analysis"  # 完整分析模式
+    SAMPLING_ONLY = "sampling_only"  # 仅采样模式
 
 
 @dataclass
@@ -50,15 +57,17 @@ class AnalysisConfig:
     include_project: bool = False
     force_recompute: bool = False
     
-    # 模式控制
+    # 流程控制
+    steps: List[int] = None  # 要执行的步骤列表，如[1,2,3]
+    
+    # 模式控制（向后兼容）
     mode: AnalysisMode = AnalysisMode.FULL_ANALYSIS
-    dry_run_reuse: bool = False
-    # 调度器: legacy(旧路径) / process(进程池单体系单核) / thread(线程池轻量)
-    scheduler: str = 'process'
     
     def __post_init__(self):
         if self.search_paths is None:
             self.search_paths = []
+        if self.steps is None:
+            self.steps = [1, 2, 3]  # 默认执行所有步骤
 
 
 # 多进程工作上下文
@@ -161,6 +170,8 @@ class AnalysisOrchestrator:
         self.streaming_enabled: bool = True
         self._stream_flush_counter: int = 0
         self._targets_flush_interval: int = 1  # 后续可参数化
+        # 记录最近一次任务统计（轻量流程）
+        self.last_task_stats: Optional[Dict[str, int]] = None
         
     def setup_logging(self) -> None:
         """设置多进程安全日志系统"""
@@ -371,11 +382,6 @@ class AnalysisOrchestrator:
             f"采样复用：待处理 {len(pending_targets)} 个体系，可复用 {len(reuse_map)} 个采样帧 (全部: {len(all_targets)}, 已跳过: {skipped_count})"
         )
 
-        # Dry-run检查
-        if self.config.dry_run_reuse:
-            self._output_reuse_plan(reuse_map, path_manager)
-            return []
-
         analysis_targets = pending_targets
         system_paths = [t.system_path for t in analysis_targets]
         
@@ -395,19 +401,6 @@ class AnalysisOrchestrator:
             return self._parallel_analysis(analyser, system_paths, path_manager, workers, reuse_map)
         else:
             return self._sequential_analysis(analyser, system_paths, path_manager, reuse_map)
-    
-    def _output_reuse_plan(self, reuse_map: dict, path_manager: PathManager) -> None:
-        """输出采样复用计划"""
-        plan = {
-            "total_targets": len(path_manager.targets),
-            "reused_sampling_systems": list(reuse_map.keys()),
-            "reused_count": len(reuse_map),
-            "resample_systems": [t.system_name for t in path_manager.targets if t.system_name not in reuse_map]
-        }
-        plan_path = os.path.join(self.current_output_dir, 'sampling_reuse_plan.json')
-        with open(plan_path, 'w', encoding='utf-8') as f:
-            json.dump(plan, f, ensure_ascii=False, indent=2)
-        self.logger.info(f"Dry-Run 完成：已生成采样复用计划 {plan_path} ，复用 {plan['reused_count']} 个，重采样 {len(plan['resample_systems'])} 个。")
     
     def _parallel_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
                           path_manager: PathManager, workers: int, reuse_map: Dict[str, List[int]]) -> List[tuple]:
@@ -677,7 +670,7 @@ class MainApp:
         
         try:
             # 解析参数并创建配置
-            config = self._parse_arguments_to_config()
+            config, args = self._parse_arguments_to_config()
             
             # 创建编排器
             self.orchestrator = AnalysisOrchestrator(config)
@@ -705,14 +698,33 @@ class MainApp:
             if self.orchestrator:
                 self.orchestrator.cleanup_logging()
     
-    def _parse_arguments_to_config(self) -> AnalysisConfig:
+    def _parse_arguments_to_config(self) -> Tuple[AnalysisConfig, argparse.Namespace]:
         """解析命令行参数并创建配置对象"""
-        parser = argparse.ArgumentParser(description='ABACUS STRU轨迹主分析器 - 重构版本（专注采样、分析、转化）')
+        parser = argparse.ArgumentParser(
+            description='ABACUS分子动力学轨迹分析器 - 支持采样、DeepMD导出和采样对比',
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog="""
+流程步骤说明:
+  1 - 采样: 执行体系发现、采样、统计分析和DeepMD导出
+  2 - 独立DeepMD导出: 仅将已有采样结果导出为DeepMD格式（当未执行步骤1时）
+  3 - 采样效果对比: 执行不同采样方法的效果对比分析
+
+使用示例:
+  python main_abacus_analyser.py                    # 执行所有步骤 [1,2,3]
+  python main_abacus_analyser.py --steps 1          # 仅执行采样（含DeepMD导出）
+  python main_abacus_analyser.py --steps 2          # 仅执行独立DeepMD导出
+  python main_abacus_analyser.py --steps 1 3        # 执行采样和采样对比
+  python main_abacus_analyser.py --steps 2 3        # 执行独立DeepMD导出和采样对比
+  python main_abacus_analyser.py --steps 1 2        # 执行采样（步骤2会被跳过）
+
+注意: 当同时指定步骤1和2时，步骤2会被自动跳过，因为步骤1已包含DeepMD导出。
+            """
+        )
 
         # 核心参数
         parser.add_argument('-r', '--sample_ratio', type=float, default=0.1, help='采样比例')
         parser.add_argument('-p', '--power_p', type=float, default=-0.5, help='幂平均距离的p值')
-        parser.add_argument('-v', '--pca_variance_ratio', type=float, default=0.90, help='PCA降维累计方差贡献率')
+        parser.add_argument('-v', '--pca_variance_ratio', type=float, default=0.95, help='PCA降维累计方差贡献率')
 
         # 运行配置
         parser.add_argument('-w', '--workers', type=int, default=-1, help='并行工作进程数')
@@ -721,14 +733,48 @@ class MainApp:
         parser.add_argument('-i', '--include_project', action='store_true', help='允许搜索项目自身目录')
         parser.add_argument('-f', '--force_recompute', action='store_true', help='强制重新计算')
 
-        # 模式控制
-        parser.add_argument('--sampling_only', action='store_true', help='仅采样模式：只执行采样算法，不计算统计指标')
-        parser.add_argument('--dry_run_reuse', action='store_true', help='仅评估采样复用计划')
-        parser.add_argument('--scheduler', choices=['legacy', 'process', 'thread'], default='process', help='调度器类型: legacy=旧逻辑, process=进程池(推荐), thread=线程池')
+        # 流程控制
+        parser.add_argument('--steps', nargs='*', type=int, default=None, 
+                          help='要执行的分析步骤：1=采样, 2=DeepMD导出, 3=采样效果对比。默认: [1,2,3]。示例: --steps 1 3')
+        
+        # 模式控制 - 互斥组（向后兼容）
+        mode_group = parser.add_mutually_exclusive_group()
+        mode_group.add_argument('--sampling_only', action='store_true', help='仅采样模式：只执行采样算法，不计算统计指标（等价于 --steps 1）')
+        
+        # 附加功能（向后兼容）
+        parser.add_argument('--sampling_compare', action='store_true', help='执行采样效果比较分析（等价于 --steps 3）')
 
         args = parser.parse_args()
 
-        return AnalysisConfig(
+        # 确定要执行的步骤
+        steps_to_run = []
+        
+        if args.steps is not None:
+            # 用户显式指定了步骤
+            steps_to_run = args.steps
+        elif args.sampling_only:
+            # 向后兼容：仅采样模式
+            steps_to_run = [1]
+        elif args.sampling_compare:
+            # 向后兼容：采样效果对比
+            steps_to_run = [3]
+        else:
+            # 默认执行所有步骤
+            steps_to_run = [1, 2, 3]
+        
+        # 验证步骤编号
+        valid_steps = [1, 2, 3]
+        invalid_steps = [s for s in steps_to_run if s not in valid_steps]
+        if invalid_steps:
+            raise ValueError(f"无效的步骤编号: {invalid_steps}。有效步骤: {valid_steps}")
+        
+        # 确定运行模式（向后兼容）
+        if 1 in steps_to_run and len(steps_to_run) == 1:
+            run_mode = AnalysisMode.SAMPLING_ONLY
+        else:
+            run_mode = AnalysisMode.FULL_ANALYSIS
+
+        config = AnalysisConfig(
             sample_ratio=args.sample_ratio,
             power_p=args.power_p,
             pca_variance_ratio=args.pca_variance_ratio,
@@ -737,21 +783,26 @@ class MainApp:
             search_paths=args.search_path or [],
             include_project=args.include_project,
             force_recompute=args.force_recompute,
-            mode=AnalysisMode.SAMPLING_ONLY if args.sampling_only else AnalysisMode.FULL_ANALYSIS,
-            dry_run_reuse=args.dry_run_reuse,
-            scheduler=args.scheduler
+            steps=steps_to_run,
+            mode=run_mode
         )
+
+        return config, args
 
     def _log_startup_info(self, config: AnalysisConfig) -> None:
         """记录启动信息"""
         search_paths = self.orchestrator.resolve_search_paths()
         search_info = f"搜索路径: {search_paths if search_paths else '(当前目录的父目录)'}"
 
-        mode_info = "仅采样模式" if config.mode == AnalysisMode.SAMPLING_ONLY else "完整分析模式"
+        # 步骤信息
+        step_names = {1: "采样(含DeepMD)", 2: "独立DeepMD导出", 3: "采样效果对比"}
+        steps_info = [f"{step}({step_names.get(step, '未知')})" for step in config.steps]
+        steps_str = ",".join(steps_info)
+        
         workers = self.orchestrator.determine_workers()
 
         self.orchestrator.logger.info(
-            f"ABACUS主分析器启动 [{mode_info}] | 采样比例: {config.sample_ratio} | 工作进程: {workers}"
+            f"ABACUS主分析器启动 [执行步骤: {steps_str}] | 采样比例: {config.sample_ratio} | 工作进程: {workers}"
         )
         self.orchestrator.logger.info(search_info)
         self.orchestrator.logger.info(
@@ -760,42 +811,207 @@ class MainApp:
         self.orchestrator.logger.info(
             f"强制重新计算: {'是' if config.force_recompute else '否'}"
         )
-        self.orchestrator.logger.info(f"调度器: {config.scheduler}")
 
         if config.mode == AnalysisMode.SAMPLING_ONLY:
             self.orchestrator.logger.info("仅采样模式：将跳过统计指标计算")
+
     
     def _execute_workflow(self, config: AnalysisConfig, start_time: float) -> None:
-        """执行主要工作流程（根据调度器分支）"""
-        if config.scheduler == 'legacy':
-            # 旧逻辑保留
-            search_paths = self.orchestrator.resolve_search_paths()
-            mol_systems = self.orchestrator.discover_systems(search_paths)
-            if not mol_systems:
-                self.orchestrator.logger.error("未找到符合格式的系统目录")
-                return
-            path_manager, actual_output_dir = self.orchestrator.setup_output_directory()
-            has_existing_results = self.orchestrator.setup_analysis_targets(path_manager, search_paths)
-            if has_existing_results and config.mode == AnalysisMode.FULL_ANALYSIS:
-                self.orchestrator.logger.info("发现完整的分析结果，无需重新分析")
-                return
-            total_molecules = len(mol_systems)
-            total_systems = sum(len(s) for s in mol_systems.values())
-            final_targets = len(path_manager.targets)
-            self.orchestrator.logger.info(f"发现 {total_molecules} 个分子，共 {total_systems} 个体系，去重后 {final_targets} 个目标")
-            analysis_results = self.orchestrator.execute_analysis(path_manager)
+        """执行主要工作流程（基于步骤列表）"""
+        self.orchestrator.logger.info(f"开始执行分析流程，步骤: {config.steps}")
+        
+        # 初始化共享数据
+        analysis_results = []
+        path_manager = None
+        actual_output_dir = None
+        
+        # 步骤1: 采样（包含DeepMD导出）
+        if 1 in config.steps:
+            self.orchestrator.logger.info("执行步骤1: 采样（包含DeepMD导出）")
+            analysis_results, path_manager, actual_output_dir = self._execute_sampling_step(config)
+        
+        # 步骤2: 独立DeepMD导出（仅当步骤1未执行时）
+        if 2 in config.steps and 1 not in config.steps:
+            self.orchestrator.logger.info("执行步骤2: 独立DeepMD导出")
+            analysis_results, path_manager, actual_output_dir = self._load_existing_results_for_deepmd(config)
             if analysis_results:
-                self.orchestrator.save_results(analysis_results, path_manager)
+                self._execute_deepmd_step(analysis_results, path_manager, actual_output_dir)
+            else:
+                self.orchestrator.logger.warning("步骤2: 未找到可用的采样数据，跳过DeepMD导出")
+        elif 2 in config.steps and 1 in config.steps:
+            self.orchestrator.logger.info("步骤2: 跳过独立DeepMD导出（已在步骤1中完成）")
+        
+        # 步骤3: 采样效果对比
+        if 3 in config.steps:
+            self.orchestrator.logger.info("执行步骤3: 采样效果对比")
+            if analysis_results:  # 如果前面的步骤已执行
+                self._execute_sampling_compare_step(analysis_results, path_manager, actual_output_dir)
+            else:  # 如果只执行步骤3，需要加载已有数据
+                analysis_results, path_manager, actual_output_dir = self._load_existing_results_for_compare(config)
+                if analysis_results:
+                    self._execute_sampling_compare_step(analysis_results, path_manager, actual_output_dir)
+                else:
+                    self.orchestrator.logger.warning("步骤3: 未找到可用的分析数据，跳过采样效果对比")
+        
+        # 最终统计和清理
+        if analysis_results and path_manager:
             self._finalize_analysis(analysis_results, path_manager, start_time, actual_output_dir)
-            return
+    
+    def _execute_sampling_step(self, config: AnalysisConfig) -> Tuple[List[tuple], PathManager, str]:
+        """执行步骤1: 采样"""
+        # 使用原有的common workflow逻辑，但确保只进行采样
+        return self._execute_common_workflow(config)
+    
+    def _execute_deepmd_step(self, analysis_results: List[tuple], path_manager: PathManager, actual_output_dir: str) -> None:
+        """执行步骤2: 独立DeepMD导出（仅当步骤1未执行时）"""
+        self.orchestrator.logger.info("开始独立DeepMD数据导出...")
+        
+        # 从已有的采样结果中导出DeepMD数据
+        deepmd_count = 0
+        for result in analysis_results:
+            if result and len(result) >= 2:
+                try:
+                    system_name = result[0].system_name if hasattr(result[0], 'system_name') else str(result[0])
+                    system_path = result[0].system_path if hasattr(result[0], 'system_path') else None
+                    
+                    # 调用已有的DeepMD导出方法
+                    if system_path:
+                        self.orchestrator._export_sampled_frames(result, system_path, system_name)
+                        deepmd_count += 1
+                        self.orchestrator.logger.debug(f"独立DeepMD导出完成: {system_name}")
+                except Exception as e:
+                    self.orchestrator.logger.error(f"独立DeepMD导出失败 {system_name}: {e}")
+        
+        self.orchestrator.logger.info(f"独立DeepMD导出完成，处理了 {deepmd_count} 个体系")
+    
+    def _execute_sampling_compare_step(self, analysis_results: List[tuple], path_manager: PathManager, actual_output_dir: str) -> None:
+        """执行步骤3: 采样效果对比"""
+        self.orchestrator.logger.info("开始采样效果对比分析...")
+        
+        try:
+            # 导入采样对比模块（参考sampling_compare_demo.py的方式）
+            from src.analysis.sampling_comparison import analyse_sampling_compare
             
-        # 新轻量逻辑 (process / thread)
+            # 获取工作进程数
+            workers = self.orchestrator.determine_workers()
+            
+            # 执行对比分析（使用demo中的函数接口）
+            analyse_sampling_compare(result_dir=actual_output_dir, workers=workers)
+            self.orchestrator.logger.info("采样效果对比分析完成")
+            
+        except ImportError as e:
+            self.orchestrator.logger.error(f"无法导入采样对比模块: {e}")
+        except Exception as e:
+            self.orchestrator.logger.error(f"采样效果对比分析失败: {e}")
+    
+    def _load_existing_results_for_deepmd(self, config: AnalysisConfig) -> Tuple[List[tuple], PathManager, str]:
+        """为DeepMD导出加载已有的分析结果"""
+        self.orchestrator.logger.info("加载已有结果用于DeepMD导出...")
+        
+        # 设置输出目录
+        path_manager, actual_output_dir = self.orchestrator.setup_output_directory()
+        
+        # 查找analysis_targets.json文件
+        targets_file = os.path.join(actual_output_dir, "analysis_targets.json")
+        if not os.path.exists(targets_file):
+            self.orchestrator.logger.error(f"未找到analysis_targets.json文件: {targets_file}")
+            return [], path_manager, actual_output_dir
+        
+        # 读取采样数据
+        try:
+            with open(targets_file, 'r', encoding='utf-8') as f:
+                targets_data = json.load(f)
+            
+            analysis_results = []
+            molecules = targets_data.get('molecules', {})
+            
+            for mol_id, mol_data in molecules.items():
+                systems = mol_data.get('systems', {})
+                for system_name, system_data in systems.items():
+                    system_path = system_data.get('system_path', '')
+                    sampled_frames_str = system_data.get('sampled_frames', '[]')
+                    
+                    # 解析采样帧列表
+                    try:
+                        if isinstance(sampled_frames_str, str):
+                            sampled_frames = json.loads(sampled_frames_str)
+                        else:
+                            sampled_frames = sampled_frames_str
+                    except:
+                        self.orchestrator.logger.warning(f"无法解析采样帧数据: {system_name}")
+                        continue
+                    
+                    if not system_path or not sampled_frames:
+                        self.orchestrator.logger.warning(f"系统数据不完整，跳过: {system_name}")
+                        continue
+                    
+                    # 解析系统信息
+                    import re
+                    match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
+                    if match:
+                        mol_id_parsed = match.group(1)
+                        conf = match.group(2)
+                        temperature = match.group(3)
+                    else:
+                        self.orchestrator.logger.warning(f"系统名称格式不正确: {system_name}")
+                        mol_id_parsed = mol_id
+                        conf = "0"
+                        temperature = "300"
+                    
+                    # 创建TrajectoryMetrics对象
+                    from src.core.metrics import TrajectoryMetrics
+                    metrics = TrajectoryMetrics(
+                        system_name=system_name,
+                        mol_id=mol_id_parsed,
+                        conf=conf,
+                        temperature=temperature,
+                        system_path=system_path
+                    )
+                    metrics.sampled_frames = sampled_frames
+                    metrics.num_frames = len(sampled_frames)
+                    
+                    # 构造分析结果元组（格式: (metrics, sampled_frames)）
+                    result = (metrics, sampled_frames)
+                    analysis_results.append(result)
+                    
+                    self.orchestrator.logger.info(f"加载采样数据: {system_name}, 采样帧数: {len(sampled_frames)}")
+            
+            self.orchestrator.logger.info(f"成功加载 {len(analysis_results)} 个系统的采样数据")
+            
+        except Exception as e:
+            self.orchestrator.logger.error(f"读取analysis_targets.json文件失败: {e}")
+            return [], path_manager, actual_output_dir
+        
+        return analysis_results, path_manager, actual_output_dir
+    
+    def _load_existing_results_for_compare(self, config: AnalysisConfig) -> Tuple[List[tuple], PathManager, str]:
+        """为采样对比加载已有的分析结果"""
+        self.orchestrator.logger.info("准备采样效果对比（从已有结果目录）...")
+        
+        # 设置输出目录
+        path_manager, actual_output_dir = self.orchestrator.setup_output_directory()
+        
+        # 检查是否存在必要的文件
+        targets_file = os.path.join(actual_output_dir, "analysis_targets.json")
+        if not os.path.exists(targets_file):
+            self.orchestrator.logger.warning(f"未找到analysis_targets.json文件: {targets_file}")
+            self.orchestrator.logger.info("采样对比将尝试从结果目录中查找可用数据")
+        
+        # 对于采样对比，我们返回一个空的分析结果列表，
+        # 因为analyse_sampling_compare函数会直接从结果目录工作
+        analysis_results = [("placeholder",)]  # 非空列表表示有数据可用
+        
+        return analysis_results, path_manager, actual_output_dir
+    
+    def _execute_common_workflow(self, config: AnalysisConfig) -> Tuple[List[tuple], PathManager, str]:
+        """执行通用工作流程（完整分析和仅采样共用）"""
+        # 新轻量逻辑 (process)
         search_paths = self.orchestrator.resolve_search_paths()
         t_discover_start = time.time()
         records = lightweight_discover_systems(search_paths, include_project=config.include_project)
         if not records:
             self.orchestrator.logger.error("轻量发现未找到体系")
-            return
+            return [], None, ""
         self.orchestrator.logger.info(f"轻量发现完成: 体系 {len(records)} 耗时 {time.time()-t_discover_start:.1f}s")
         
         # 输出目录
@@ -820,96 +1036,52 @@ class MainApp:
             'pca_variance_ratio': config.pca_variance_ratio
         }
         workers = self.orchestrator.determine_workers()
-        self.orchestrator.logger.info(f"使用调度器: {config.scheduler} (workers={workers})")
         
         analysis_results: List[tuple] = []
-        if config.scheduler == 'process':
-            # 迁移为通用任务准备与结果处理工具
-            from src.utils.parallel_utils_ext import prepare_parallel_tasks, process_parallel_results
-            tasks, stats = prepare_parallel_tasks(
-                records, config, path_manager, ResultSaver, logger=self.orchestrator.logger
-            )
+        # 迁移为通用任务准备与结果处理工具
+        from src.utils.parallel_utils_ext import prepare_parallel_tasks, process_parallel_results
+        tasks, stats = prepare_parallel_tasks(
+            records, config, path_manager, ResultSaver, logger=self.orchestrator.logger
+        )
+        # 保存统计供最终总结使用
+        self.orchestrator.last_task_stats = stats
+        if stats.get('tasks', 0) > 0:
             self.orchestrator.logger.info(
                 f"进程模式任务: {stats['tasks']} (复用采样 {stats['reused']}, 跳过 {stats['skipped']}, 仅导出deepmd {stats['deepmd_only']}, 复用采样补分析 {stats['reuse_sampling_analysis']})"
             )
-            # 运行任务
-            from src.core.process_scheduler import _worker
-            from concurrent.futures import ProcessPoolExecutor, as_completed
-            results = []
-            failures = 0
-            completed_count = 0
-            total_count = len(tasks)
-            t0 = time.time()
-            with ProcessPoolExecutor(max_workers=workers) as pool:
-                future_to_task = {}
-                for task in tasks:
-                    future = pool.submit(_worker, task, analyser_params)
-                    future_to_task[future] = task
-                for future in as_completed(future_to_task):
-                    completed_count += 1
-                    task = future_to_task[future]
-                    try:
-                        sys_name, result, dur = future.result()
-                        if result is None or (isinstance(result, tuple) and result[0] is None):
-                            failures += 1
-                            self.orchestrator.logger.warning(f"({completed_count}/{total_count}) {sys_name} 体系分析失败 (用时 {dur:.2f}s)")
-                        else:
-                            results.append(result)
-                            mode_suffix = "[仅采样]" if config.mode == AnalysisMode.SAMPLING_ONLY else ""
-                            self.orchestrator.logger.info(f"({completed_count}/{total_count}) {sys_name} 体系分析完成 {mode_suffix}")
-                    except Exception as e:
+        # 运行任务
+        from src.core.process_scheduler import _worker
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        results = []
+        failures = 0
+        completed_count = 0
+        total_count = len(tasks)
+        t0 = time.time()
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            future_to_task = {}
+            for task in tasks:
+                future = pool.submit(_worker, task, analyser_params)
+                future_to_task[future] = task
+            for future in as_completed(future_to_task):
+                completed_count += 1
+                task = future_to_task[future]
+                try:
+                    sys_name, result, dur = future.result()
+                    if result is None or (isinstance(result, tuple) and result[0] is None):
                         failures += 1
-                        self.orchestrator.logger.error(f"({completed_count}/{total_count}) {task.system_name} 体系分析异常: {e}")
+                        self.orchestrator.logger.warning(f"({completed_count}/{total_count}) {sys_name} 体系分析失败 (用时 {dur:.2f}s)")
+                    else:
+                        results.append(result)
+                        mode_suffix = "[仅采样]" if config.mode == AnalysisMode.SAMPLING_ONLY else ""
+                        self.orchestrator.logger.info(f"({completed_count}/{total_count}) {sys_name} 体系分析完成 {mode_suffix}")
+                except Exception as e:
+                    failures += 1
+                    self.orchestrator.logger.error(f"({completed_count}/{total_count}) {task.system_name} 体系分析异常: {e}")
+        if total_count > 0:
             self.orchestrator.logger.info(f"进程调度完成: 成功 {len(results)} 失败 {failures} 总耗时 {time.time()-t0:.1f}s")
-            analysis_results = [r for r in results if r]
-            # 统一结果处理
-            process_parallel_results(analysis_results, actual_output_dir, config, self.orchestrator.logger, ResultSaver)
-        else:  # thread
-            from src.core.analysis_orchestrator import AnalysisOrchestrator as CoreOrch
-            core_orch = CoreOrch()
-            # 初始化组件 (仅日志与 system_analyser 用)
-            # 复用已建立日志
-            core_orch.logger = self.orchestrator.logger
-            core_orch.path_manager = path_manager
-            core_orch.system_analyser = SystemAnalyser(
-                include_hydrogen=False,
-                sample_ratio=config.sample_ratio,
-                power_p=config.power_p,
-                pca_variance_ratio=config.pca_variance_ratio
-            )
-            analysis_results = core_orch.run_parallel_lightweight(search_paths, include_project=config.include_project, max_workers=workers)
-        
-        # 保存结果和导出DeepMD数据
-        self.orchestrator.logger.info(f"开始保存 {len(analysis_results)} 个体系的分析结果...")
-        
-        for i, res in enumerate(analysis_results):
-            try:
-                if len(res) >= 2:
-                    metrics = res[0]
-                    frames = res[1]
-                    system_name = getattr(metrics, 'system_name', 'unknown')
-                    system_path = getattr(metrics, 'system_path', '')
-                    
-                    ResultSaver.save_single_system(actual_output_dir, res, sampling_only=(config.mode==AnalysisMode.SAMPLING_ONLY))
-                    
-                    out_root = os.path.join(actual_output_dir, 'deepmd_npy_per_system')
-                    ResultSaver.export_sampled_frames_per_system(
-                        frames=frames,
-                        sampled_frame_ids=getattr(metrics, 'sampled_frames', []) or [],
-                        system_path=system_path,
-                        output_root=out_root,
-                        system_name=system_name,
-                        logger=self.orchestrator.logger,
-                        force=False
-                    )
-                    
-                    # 每5个系统显示一次保存进度
-                    if (i + 1) % 5 == 0 or (i + 1) == len(analysis_results):
-                        self.orchestrator.logger.info(f"已保存 {i + 1}/{len(analysis_results)} 个体系的结果")
-            except Exception as e:
-                self.orchestrator.logger.warning(f"保存体系结果失败(忽略): {e}")
-        
-        self.orchestrator.logger.info(f"所有分析结果和DeepMD数据保存完成")
+        analysis_results = [r for r in results if r]
+        # 统一结果处理
+        process_parallel_results(analysis_results, actual_output_dir, config, self.orchestrator.logger, ResultSaver)
         
         # 同步采样帧与保存 targets
         try:
@@ -922,7 +1094,7 @@ class MainApp:
         except Exception as e:
             self.orchestrator.logger.warning(f"保存 targets 失败(忽略): {e}")
         
-        self._finalize_analysis(analysis_results, path_manager, start_time, actual_output_dir)
+        return analysis_results, path_manager, actual_output_dir
     
     def _finalize_analysis(self, analysis_results: List[tuple], path_manager: PathManager, 
                           start_time: float, output_dir: str) -> None:
@@ -940,10 +1112,39 @@ class MainApp:
 
         # 输出最终统计
         elapsed = time.time() - start_time
-        mode_info = "仅采样模式" if self.orchestrator.config.mode == AnalysisMode.SAMPLING_ONLY else "完整分析模式"
-        
+        mode_map = {
+            AnalysisMode.FULL_ANALYSIS: "完整分析模式",
+            AnalysisMode.SAMPLING_ONLY: "仅采样模式", 
+        }
+        mode_info = mode_map.get(self.orchestrator.config.mode, "未知模式")
+        stats = getattr(self.orchestrator, 'last_task_stats', None)
+        total_targets = len(path_manager.targets)
+        analysed_count = len(analysis_results)
+        if stats:
+            tasks_planned = stats.get('tasks', analysed_count)
+            skipped_full = stats.get('skipped', 0)
+            deepmd_only = stats.get('deepmd_only', 0)
+            reuse_sampling_analysis = stats.get('reuse_sampling_analysis', 0)
+            reused_sampling = stats.get('reused', 0)
+        else:
+            tasks_planned = analysed_count
+            skipped_full = deepmd_only = reuse_sampling_analysis = reused_sampling = 0
+
         self.orchestrator.logger.info("=" * 60)
-        self.orchestrator.logger.info(f"分析完成! [{mode_info}] 处理体系: {len(analysis_results)}/{len(path_manager.targets)}")
+        # 构造更具信息量的总结
+        if tasks_planned == 0:
+            # 没有需要真正分析的任务
+            self.orchestrator.logger.info(
+                f"分析完成! [{mode_info}] 无需分析的新体系 (总体系 {total_targets}, 已完成跳过 {skipped_full}, 仅导出deepmd {deepmd_only})"
+            )
+        else:
+            self.orchestrator.logger.info(
+                (
+                    f"分析完成! [{mode_info}] 实际分析 {analysed_count}/{tasks_planned}  | "
+                    f"总体系 {total_targets}, 已完成跳过 {skipped_full}, 仅导出deepmd {deepmd_only}, "
+                    f"复用采样直接分析 {reuse_sampling_analysis}, 采样帧复用命中 {reused_sampling}"
+                )
+            )
 
         if analysis_results and self.orchestrator.config.mode == AnalysisMode.FULL_ANALYSIS:
             # 仅在完整模式下输出采样统计
@@ -964,4 +1165,13 @@ class MainApp:
 
 
 if __name__ == "__main__":
-    MainApp().run()
+    # 解析参数，兼容采样比较分析
+    app = MainApp()
+    config, args = app._parse_arguments_to_config()
+    app.run()
+    # 采样比较分析流程（主流程参数自动复用）
+    if hasattr(args, 'sampling_compare') and args.sampling_compare:
+        from src.analysis.sampling_comparison import analyse_sampling_compare
+        print("\n[采样效果比较分析] 开始 ...")
+        analyse_sampling_compare(result_dir=config.output_dir, workers=config.workers)
+        print("[采样效果比较分析] 完成！\n")

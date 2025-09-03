@@ -83,6 +83,32 @@ class ResultSaver:
         return 'NEED_FULL_ANALYSIS'
 
     @staticmethod
+    def classify_system_status_sampling_only(
+        output_dir: str,
+        system_name: str,
+        sampling_meta: Optional[Dict[str, any]],
+    ) -> str:
+        """判定体系在仅采样模式下的状态（不考虑DeepMD）
+        
+        状态定义：
+          SAMPLING_DONE: 采样列表存在 → 跳过采样
+          NEED_SAMPLING: 采样列表不存在 → 需要采样
+        
+        Args:
+            output_dir: run_* 实际输出目录
+            system_name: 体系名称
+            sampling_meta: analysis_targets.json 中该体系的元数据
+        
+        Returns:
+            字符串标识的状态
+        """
+        has_sampling_list = bool(sampling_meta and sampling_meta.get('sampled_frames'))
+        
+        if has_sampling_list:
+            return 'SAMPLING_DONE'
+        return 'NEED_SAMPLING'
+
+    @staticmethod
     def export_sampled_frames_direct(
         system_path: str,
         sampled_frame_ids: List[int],
