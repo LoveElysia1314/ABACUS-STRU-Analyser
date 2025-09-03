@@ -103,6 +103,18 @@ class ProcessScheduler:
         # 设置全局日志队列
         ProcessSchedulerContext.set_log_queue(log_queue)
         self.tasks: List[ProcessAnalysisTask] = []
+        
+        # 设置调度器的logger，使用传入的log_queue
+        if log_queue is not None:
+            from ..utils.logmanager import LoggerManager
+            self.logger = LoggerManager.setup_worker_logger(
+                name="ProcessScheduler",
+                queue=log_queue,
+                level=logging.INFO,
+                add_console=False
+            )
+        else:
+            self.logger = logging.getLogger("ProcessScheduler")
 
     def add_task(self, task: ProcessAnalysisTask):
         self.tasks.append(task)
@@ -111,7 +123,7 @@ class ProcessScheduler:
         if not self.tasks:
             return []
         t0 = time.time()
-        logger.info(f"ProcessScheduler: 提交 {len(self.tasks)} 个体系, 进程数={self.max_workers}")
+        self.logger.info(f"ProcessScheduler: 提交 {len(self.tasks)} 个体系, 进程数={self.max_workers}")
         results: List[Any] = []
         failures = 0
         with ProcessPoolExecutor(max_workers=self.max_workers) as pool:
@@ -123,16 +135,17 @@ class ProcessScheduler:
                 sys_name, result, dur = fut.result()
                 if result is None or (isinstance(result, tuple) and result[0] is None):
                     failures += 1
-                    logger.warning(f"失败 {sys_name} 用时 {dur:.2f}s")
+                    self.logger.warning(f"({completed}/{len(future_map)}) {sys_name} 体系分析失败 (用时 {dur:.2f}s)")
                 else:
                     results.append(result)
+                    self.logger.info(f"({completed}/{len(future_map)}) {sys_name} 体系分析完成 (用时 {dur:.2f}s)")
                 now = time.time()
-                if now - last_log >= 10 or completed == len(future_map):
-                    logger.info(
-                        f"进度 {completed}/{len(future_map)} 总耗时 {now-t0:.1f}s 失败 {failures}"
+                if now - last_log >= 30 or completed == len(future_map):  # 增加到30秒输出一次总体进度
+                    self.logger.info(
+                        f"总体进度: {completed}/{len(future_map)} 成功 {len(results)} 失败 {failures} 累计耗时 {now-t0:.1f}s"
                     )
                     last_log = now
-        logger.info(
+        self.logger.info(
             f"ProcessScheduler 完成: 成功 {len(results)} 失败 {failures} 总耗时 {time.time()-t0:.1f}s"
         )
         return results
