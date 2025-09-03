@@ -26,6 +26,8 @@ from src.io.result_saver import ResultSaver
 from src.utils.common import ErrorHandler
 from src.utils.common import FileUtils
 from src.analysis.sampling_comparison.streaming_compare import StreamingSamplingComparisonManager
+from src.io.lightweight_discovery import lightweight_discover_systems, load_sampling_reuse_map
+from src.core.process_scheduler import ProcessScheduler, ProcessAnalysisTask
 
 # 采样效果评估（采样对比）
 try:
@@ -66,6 +68,8 @@ class AnalysisConfig:
     mode: AnalysisMode = AnalysisMode.FULL_ANALYSIS
     dry_run_reuse: bool = False
     enable_sampling_eval: bool = True
+    # 调度器: legacy(旧路径) / process(进程池单体系单核) / thread(线程池轻量)
+    scheduler: str = 'legacy'
     
     def __post_init__(self):
         if self.search_paths is None:
@@ -814,30 +818,30 @@ class MainApp:
                 self.orchestrator.cleanup_logging()
     
     def _parse_arguments_to_config(self) -> AnalysisConfig:
-        """解析命令行参数并创建配置对象"""
+        """解析命令行参数并创建配置对象 (修正缩进)"""
         parser = argparse.ArgumentParser(description='ABACUS STRU轨迹主分析器 - 重构版本')
-        
+
         # 核心参数
         parser.add_argument('-r', '--sample_ratio', type=float, default=0.1, help='采样比例')
         parser.add_argument('-p', '--power_p', type=float, default=-0.5, help='幂平均距离的p值')
         parser.add_argument('-v', '--pca_variance_ratio', type=float, default=0.90, help='PCA降维累计方差贡献率')
-        
+
         # 运行配置
         parser.add_argument('-w', '--workers', type=int, default=-1, help='并行工作进程数')
         parser.add_argument('-o', '--output_dir', type=str, default='analysis_results', help='输出根目录')
         parser.add_argument('-s', '--search_path', nargs='*', default=None, help='递归搜索路径')
         parser.add_argument('-i', '--include_project', action='store_true', help='允许搜索项目自身目录')
         parser.add_argument('-f', '--force_recompute', action='store_true', help='强制重新计算')
-        
+
         # 模式控制
         parser.add_argument('--sampling_only', action='store_true', help='仅采样模式：只执行采样算法，不计算统计指标')
         parser.add_argument('--dry_run_reuse', action='store_true', help='仅评估采样复用计划')
         parser.add_argument('--disable_sampling_eval', dest='enable_sampling_eval', action='store_false', help='禁用采样效果评估')
-        
+        parser.add_argument('--scheduler', choices=['legacy', 'process', 'thread'], default='process', help='调度器类型: legacy=旧逻辑, process=进程池(推荐), thread=线程池')
+
         args = parser.parse_args()
-        
-        # 创建配置对象
-        config = AnalysisConfig(
+
+        return AnalysisConfig(
             sample_ratio=args.sample_ratio,
             power_p=args.power_p,
             pca_variance_ratio=args.pca_variance_ratio,
@@ -848,65 +852,139 @@ class MainApp:
             force_recompute=args.force_recompute,
             mode=AnalysisMode.SAMPLING_ONLY if args.sampling_only else AnalysisMode.FULL_ANALYSIS,
             dry_run_reuse=args.dry_run_reuse,
-            enable_sampling_eval=args.enable_sampling_eval
+            enable_sampling_eval=args.enable_sampling_eval,
+            scheduler=args.scheduler
         )
-        
-        return config
-    
+
     def _log_startup_info(self, config: AnalysisConfig) -> None:
-        """记录启动信息"""
+        """记录启动信息 (修正缩进)"""
         search_paths = self.orchestrator.resolve_search_paths()
         search_info = f"搜索路径: {search_paths if search_paths else '(当前目录的父目录)'}"
-        
+
         mode_info = "仅采样模式" if config.mode == AnalysisMode.SAMPLING_ONLY else "完整分析模式"
         workers = self.orchestrator.determine_workers()
-        
-        self.orchestrator.logger.info(f"ABACUS主分析器启动 [{mode_info}] | 采样比例: {config.sample_ratio} | 工作进程: {workers}")
+
+        self.orchestrator.logger.info(
+            f"ABACUS主分析器启动 [{mode_info}] | 采样比例: {config.sample_ratio} | 工作进程: {workers}"
+        )
         self.orchestrator.logger.info(search_info)
-        self.orchestrator.logger.info(f"项目目录屏蔽: {'关闭' if config.include_project else '开启'}")
-        self.orchestrator.logger.info(f"强制重新计算: {'是' if config.force_recompute else '否'}")
-        
+        self.orchestrator.logger.info(
+            f"项目目录屏蔽: {'关闭' if config.include_project else '开启'}"
+        )
+        self.orchestrator.logger.info(
+            f"强制重新计算: {'是' if config.force_recompute else '否'}"
+        )
+        self.orchestrator.logger.info(f"调度器: {config.scheduler}")
+
         if config.mode == AnalysisMode.SAMPLING_ONLY:
             self.orchestrator.logger.info("仅采样模式：将跳过统计指标计算和后续分析")
     
     def _execute_workflow(self, config: AnalysisConfig, start_time: float) -> None:
-        """执行主要工作流程"""
-        # 1. 系统发现
+        """执行主要工作流程 (根据调度器分支)"""
+        if config.scheduler == 'legacy':
+            # 旧逻辑保留
+            search_paths = self.orchestrator.resolve_search_paths()
+            mol_systems = self.orchestrator.discover_systems(search_paths)
+            if not mol_systems:
+                self.orchestrator.logger.error("未找到符合格式的系统目录")
+                return
+            path_manager, actual_output_dir = self.orchestrator.setup_output_directory()
+            has_existing_results = self.orchestrator.setup_analysis_targets(path_manager, mol_systems)
+            if has_existing_results and config.mode == AnalysisMode.FULL_ANALYSIS:
+                self.orchestrator.logger.info("发现完整的分析结果，直接执行后续分析")
+                self.orchestrator.run_post_analysis()
+                return
+            total_molecules = len(mol_systems)
+            total_systems = sum(len(s) for s in mol_systems.values())
+            final_targets = len(path_manager.targets)
+            self.orchestrator.logger.info(f"发现 {total_molecules} 个分子，共 {total_systems} 个体系，去重后 {final_targets} 个目标")
+            analysis_results = self.orchestrator.execute_analysis(path_manager)
+            if analysis_results:
+                self.orchestrator.save_results(analysis_results, path_manager)
+                self.orchestrator.run_post_analysis()
+            self._finalize_analysis(analysis_results, path_manager, start_time, actual_output_dir)
+            return
+        # 新轻量逻辑 (process / thread)
         search_paths = self.orchestrator.resolve_search_paths()
-        mol_systems = self.orchestrator.discover_systems(search_paths)
-        if not mol_systems:
-            self.orchestrator.logger.error("未找到符合格式的系统目录")
+        t_discover_start = time.time()
+        records = lightweight_discover_systems(search_paths, include_project=config.include_project)
+        if not records:
+            self.orchestrator.logger.error("轻量发现未找到体系")
             return
-        
-        # 2. 设置输出目录
+        self.orchestrator.logger.info(f"轻量发现完成: 体系 {len(records)} 耗时 {time.time()-t_discover_start:.1f}s")
+        # 输出目录
         path_manager, actual_output_dir = self.orchestrator.setup_output_directory()
-        
-        # 3. 设置分析目标
-        has_existing_results = self.orchestrator.setup_analysis_targets(path_manager, mol_systems)
-        
-        # 4. 快速路径检查（仅对完整分析有效）
-        if has_existing_results and config.mode == AnalysisMode.FULL_ANALYSIS:
-            self.orchestrator.logger.info("发现完整的分析结果，直接执行后续分析")
+        # 构建 mol_systems 用于 path_manager 兼容保存采样信息
+        mol_systems: Dict[str, List[str]] = {}
+        for rec in records:
+            mol_systems.setdefault(rec.mol_id, []).append(rec.system_path)
+        path_manager.load_from_discovery(mol_systems, preserve_existing=False)
+        path_manager.deduplicate_targets()
+        # 采样复用 map
+        reuse_map_raw = {}
+        if path_manager.targets_file:
+            reuse_map_raw = load_sampling_reuse_map(path_manager.targets_file)
+        # 构建任务
+        analyser_params = {
+            'sample_ratio': config.sample_ratio,
+            'power_p': config.power_p,
+            'pca_variance_ratio': config.pca_variance_ratio
+        }
+        workers = self.orchestrator.determine_workers()
+        self.orchestrator.logger.info(f"使用调度器: {config.scheduler} (workers={workers})")
+        analysis_results: List[tuple] = []
+        if config.scheduler == 'process':
+            scheduler = ProcessScheduler(max_workers=workers, analyser_params=analyser_params)
+            reused = 0
+            for rec in records:
+                pre = None
+                meta = reuse_map_raw.get(rec.system_name)
+                if meta and meta.get('source_hash') == rec.source_hash and meta.get('sampled_frames'):
+                    pre = meta.get('sampled_frames')
+                    reused += 1
+                scheduler.add_task(ProcessAnalysisTask(
+                    system_path=rec.system_path,
+                    system_name=rec.system_name,
+                    pre_sampled_frames=pre,
+                    pre_stru_files=rec.selected_files,
+                ))
+            self.orchestrator.logger.info(f"进程模式任务: {len(records)} (复用 {reused})")
+            raw_results = scheduler.run()
+            # 过滤 None
+            analysis_results = [r for r in raw_results if r]
+        else:  # thread
+            from src.core.analysis_orchestrator import AnalysisOrchestrator as CoreOrch
+            core_orch = CoreOrch()
+            # 初始化组件 (仅日志与 system_analyser 用)
+            # 复用已建立日志
+            core_orch.logger = self.orchestrator.logger
+            core_orch.path_manager = path_manager
+            core_orch.system_analyser = SystemAnalyser(
+                include_hydrogen=False,
+                sample_ratio=config.sample_ratio,
+                power_p=config.power_p,
+                pca_variance_ratio=config.pca_variance_ratio
+            )
+            analysis_results = core_orch.run_parallel_lightweight(search_paths, include_project=config.include_project, max_workers=workers)
+        # 保存结果(逐体系流式写)
+        for res in analysis_results:
+            try:
+                ResultSaver.save_single_system(actual_output_dir, res, sampling_only=(config.mode==AnalysisMode.SAMPLING_ONLY))
+            except Exception as e:
+                self.orchestrator.logger.warning(f"保存体系结果失败(忽略): {e}")
+        # 同步采样帧与保存 targets
+        try:
+            path_manager.update_sampled_frames_from_results(analysis_results)
+            path_manager.save_analysis_targets({
+                'sample_ratio': config.sample_ratio,
+                'power_p': config.power_p,
+                'pca_variance_ratio': config.pca_variance_ratio
+            })
+        except Exception as e:
+            self.orchestrator.logger.warning(f"保存 targets 失败(忽略): {e}")
+        # 后续分析
+        if config.mode == AnalysisMode.FULL_ANALYSIS:
             self.orchestrator.run_post_analysis()
-            return
-        
-        # 5. 输出系统统计
-        total_molecules = len(mol_systems)
-        total_systems = sum(len(s) for s in mol_systems.values())
-        final_targets = len(path_manager.targets)
-        self.orchestrator.logger.info(f"发现 {total_molecules} 个分子，共 {total_systems} 个体系，去重后 {final_targets} 个目标")
-        
-        # 6. 执行分析
-        analysis_results = self.orchestrator.execute_analysis(path_manager)
-        
-        # 7. 保存结果
-        if analysis_results:
-            self.orchestrator.save_results(analysis_results, path_manager)
-            
-            # 8. 后续分析（仅完整模式）
-            self.orchestrator.run_post_analysis()
-        
-        # 9. 保存最终状态并输出统计
         self._finalize_analysis(analysis_results, path_manager, start_time, actual_output_dir)
     
     def _finalize_analysis(self, analysis_results: List[tuple], path_manager: PathManager, 
