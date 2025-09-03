@@ -411,64 +411,59 @@ class AnalysisOrchestrator:
     
     def _parallel_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
                           path_manager: PathManager, workers: int, reuse_map: Dict[str, List[int]]) -> List[tuple]:
-        """并行分析系统"""
-        analysis_results = []
+        """并行分析系统（重构为调用parallel_utils）"""
+        from src.utils.parallel_utils import run_parallel_tasks
         sampling_only = self.config.mode == AnalysisMode.SAMPLING_ONLY
         initializer_args = (analyser.sample_ratio, analyser.power_p, analyser.pca_variance_ratio, 
                            reuse_map, sampling_only, self.log_queue)
-        chunksize = 1
-
-        with mp.Pool(processes=workers, initializer=_child_init, initargs=initializer_args) as pool:
-            try:
-                total_systems = len(system_paths)
-                for result in pool.imap_unordered(_child_worker, system_paths, chunksize=chunksize):
-                    if result:
-                        analysis_results.append(result)
-                        
-                        # 获取系统信息
-                        try:
-                            system_name = result[0].system_name
-                            system_path = result[0].system_path
-                        except (IndexError, AttributeError):
-                            system_name = "未知体系"
-
-                        mode_suffix = "[仅采样]" if sampling_only else ""
-                        current_count = len(analysis_results)
-                        self.logger.info(f"({current_count}/{total_systems}) {system_name} 体系分析完成 {mode_suffix}")
-                        
-                        # 即时导出DeepMD数据（如果有采样结果）
-                        if system_path and len(result) >= 2:
-                            self._export_sampled_frames(result, system_path, system_name)
-
-                        # 流式保存单体系结果
-                        if self.streaming_enabled:
-                            try:
-                                # 立即同步当前系统的采样帧到PathManager.targets
-                                self._sync_sampled_frames_to_targets(result, path_manager)
-                                
-                                ResultSaver.save_single_system(
-                                    output_dir=self.current_output_dir,
-                                    result=result,
-                                    sampling_only=sampling_only,
-                                    flush_targets_hook=(lambda: path_manager.save_analysis_targets({
-                                        'sample_ratio': self.config.sample_ratio,
-                                        'power_p': self.config.power_p,
-                                        'pca_variance_ratio': self.config.pca_variance_ratio
-                                    })) if (self._targets_flush_interval == 1 or ((len(analysis_results) % self._targets_flush_interval) == 0)) else None
-                                )
-                            except (IOError, OSError) as se:
-                                self.logger.warning("流式保存体系结果失败(忽略): %s", se)
-                    else:
-                        self.logger.warning("并行分析返回空结果，标记为失败")
-            except (RuntimeError, ValueError) as e:
-                ErrorHandler.log_detailed_error(
-                    self.logger, e, "并行处理出错",
-                    additional_info={
-                        "工作进程数": workers,
-                        "系统路径数量": len(system_paths),
-                        "已完成数量": len(analysis_results)
-                    }
-                )
+        # 构造任务列表
+        tasks = system_paths
+        # 封装worker
+        def worker(system_path):
+            return _child_worker(system_path)
+        # 调用通用并行工具
+        results = run_parallel_tasks(
+            tasks=tasks,
+            worker_fn=worker,
+            workers=workers,
+            mode="process",
+            initializer=_child_init,
+            initargs=initializer_args,
+            log_queue=self.log_queue,
+            logger=self.logger,
+            desc="体系分析"
+        )
+        # 后处理：流式保存、DeepMD导出、采样帧同步
+        analysis_results = []
+        for result in results:
+            if result:
+                analysis_results.append(result)
+                try:
+                    system_name = result[0].system_name
+                    system_path = result[0].system_path
+                except (IndexError, AttributeError):
+                    system_name = "未知体系"
+                # 即时导出DeepMD数据
+                if system_path and len(result) >= 2:
+                    self._export_sampled_frames(result, system_path, system_name)
+                # 流式保存单体系结果
+                if self.streaming_enabled:
+                    try:
+                        self._sync_sampled_frames_to_targets(result, path_manager)
+                        ResultSaver.save_single_system(
+                            output_dir=self.current_output_dir,
+                            result=result,
+                            sampling_only=sampling_only,
+                            flush_targets_hook=(lambda: path_manager.save_analysis_targets({
+                                'sample_ratio': self.config.sample_ratio,
+                                'power_p': self.config.power_p,
+                                'pca_variance_ratio': self.config.pca_variance_ratio
+                            })) if (self._targets_flush_interval == 1 or ((len(analysis_results) % self._targets_flush_interval) == 0)) else None
+                        )
+                    except (IOError, OSError) as se:
+                        self.logger.warning("流式保存体系结果失败(忽略): %s", se)
+            else:
+                self.logger.warning("并行分析返回空结果，标记为失败")
         return analysis_results
     
     def _sequential_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
@@ -829,102 +824,30 @@ class MainApp:
         
         analysis_results: List[tuple] = []
         if config.scheduler == 'process':
-            # 直接在主进程中管理 ProcessPoolExecutor，确保日志输出正确
-            from concurrent.futures import ProcessPoolExecutor, as_completed
-            
-            # 准备任务
-            tasks = []
-            reused = 0
-            skipped = 0
-            deepmd_only = 0
-            reuse_sampling_analysis = 0
-            # 预加载 targets 元数据 (若存在)
-            targets_meta = {}
-            targets_file = path_manager.targets_file
-            if targets_file and os.path.exists(targets_file):
-                try:
-                    with open(targets_file, 'r', encoding='utf-8') as tf:
-                        targets_json = json.load(tf)
-                    # 构造 system_name -> meta 映射
-                    for mol in targets_json.get('molecules', {}).values():
-                        for s_name, s_info in mol.get('systems', {}).items():
-                            targets_meta[s_name] = s_info
-                except Exception as e:
-                    self.orchestrator.logger.warning(f"读取 targets 元数据失败(忽略): {e}")
-            deepmd_root = os.path.join(actual_output_dir, 'deepmd_npy_per_system')
-            for rec in records:
-                if config.force_recompute:
-                    status = 'FORCE_RECOMPUTE'
-                else:
-                    sampling_meta = targets_meta.get(rec.system_name)
-                    status = ResultSaver.classify_system_status(
-                        actual_output_dir,
-                        rec.system_name,
-                        sampling_meta=sampling_meta,
-                        deepmd_root=deepmd_root
-                    )
-                if status == 'ALL_DONE':
-                    skipped += 1
-                    self.orchestrator.logger.info(f"{rec.system_name} 已完成(采样+指标+deepmd)，跳过")
-                    continue
-                if status == 'NEED_EXPORT_ONLY':
-                    # 直接导出 deepmd, 不提交分析任务
-                    sampled_frames = sampling_meta.get('sampled_frames') if sampling_meta else []
-                    try:
-                        ResultSaver.export_sampled_frames_direct(
-                            system_path=rec.system_path,
-                            sampled_frame_ids=sampled_frames,
-                            output_root=deepmd_root,
-                            system_name=rec.system_name,
-                            logger=self.orchestrator.logger,
-                            force=False
-                        )
-                        deepmd_only += 1
-                        self.orchestrator.logger.info(f"{rec.system_name} 仅缺 deepmd，已补齐导出，跳过分析")
-                        continue
-                    except Exception as e:
-                        self.orchestrator.logger.warning(f"{rec.system_name} deepmd 快速导出失败，转入完整分析: {e}")
-                        # 失败则继续走分析
-                pre = None
-                meta = reuse_map_raw.get(rec.system_name)
-                if meta and meta.get('source_hash') == rec.source_hash and meta.get('sampled_frames'):
-                    pre = meta.get('sampled_frames')
-                    reused += 1
-                if status == 'NEED_ANALYSIS_WITH_REUSED_SAMPLING' and pre:
-                    reuse_sampling_analysis += 1
-                tasks.append(ProcessAnalysisTask(
-                    system_path=rec.system_path,
-                    system_name=rec.system_name,
-                    pre_sampled_frames=pre,
-                    pre_stru_files=rec.selected_files,
-                ))
-            
-            self.orchestrator.logger.info(
-                f"进程模式任务: {len(tasks)} (复用采样 {reused}, 跳过 {skipped}, 仅导出deepmd {deepmd_only}, 复用采样补分析 {reuse_sampling_analysis})"
+            # 迁移为通用任务准备与结果处理工具
+            from src.utils.parallel_utils_ext import prepare_parallel_tasks, process_parallel_results
+            tasks, stats = prepare_parallel_tasks(
+                records, config, path_manager, ResultSaver, logger=self.orchestrator.logger
             )
-            
-            # 运行任务并在主进程中显示进度
+            self.orchestrator.logger.info(
+                f"进程模式任务: {stats['tasks']} (复用采样 {stats['reused']}, 跳过 {stats['skipped']}, 仅导出deepmd {stats['deepmd_only']}, 复用采样补分析 {stats['reuse_sampling_analysis']})"
+            )
+            # 运行任务
+            from src.core.process_scheduler import _worker
+            from concurrent.futures import ProcessPoolExecutor, as_completed
             results = []
             failures = 0
             completed_count = 0
             total_count = len(tasks)
             t0 = time.time()
-            
-            # 设置环境变量
-            from src.core.process_scheduler import _set_single_thread_env, _worker
-            
             with ProcessPoolExecutor(max_workers=workers) as pool:
-                # 提交所有任务
                 future_to_task = {}
                 for task in tasks:
                     future = pool.submit(_worker, task, analyser_params)
                     future_to_task[future] = task
-                
-                # 处理完成的任务
                 for future in as_completed(future_to_task):
                     completed_count += 1
                     task = future_to_task[future]
-                    
                     try:
                         sys_name, result, dur = future.result()
                         if result is None or (isinstance(result, tuple) and result[0] is None):
@@ -937,9 +860,10 @@ class MainApp:
                     except Exception as e:
                         failures += 1
                         self.orchestrator.logger.error(f"({completed_count}/{total_count}) {task.system_name} 体系分析异常: {e}")
-            
             self.orchestrator.logger.info(f"进程调度完成: 成功 {len(results)} 失败 {failures} 总耗时 {time.time()-t0:.1f}s")
             analysis_results = [r for r in results if r]
+            # 统一结果处理
+            process_parallel_results(analysis_results, actual_output_dir, config, self.orchestrator.logger, ResultSaver)
         else:  # thread
             from src.core.analysis_orchestrator import AnalysisOrchestrator as CoreOrch
             core_orch = CoreOrch()
