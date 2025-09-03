@@ -161,6 +161,37 @@ class CorrelationAnalyser:
             self.logger.info(f"成功读取数据文件: {csv_file_path}")
             self.logger.info("开始进行相关性分析（遵循单一变量原则）...")
 
+            # 过滤掉包含列名作为值的行（处理重复标题行的问题）
+            original_shape = df.shape
+            df = df[~df['Molecule_ID'].isin(['Molecule_ID'])]
+            df = df[~df['Configuration'].isin(['Configuration'])]
+            df = df[~df['Temperature(K)'].isin(['Temperature(K)'])]
+            
+            if df.shape[0] < original_shape[0]:
+                self.logger.warning(f"过滤掉 {original_shape[0] - df.shape[0]} 行重复标题行")
+            
+            # 确保数据类型正确
+            df['Molecule_ID'] = pd.to_numeric(df['Molecule_ID'], errors='coerce')
+            df['Configuration'] = pd.to_numeric(df['Configuration'], errors='coerce') 
+            df['Temperature(K)'] = pd.to_numeric(df['Temperature(K)'], errors='coerce')
+            
+            # 转换所有指标列为数值类型
+            for indicator in self.indicators:
+                if indicator in df.columns:
+                    df[indicator] = pd.to_numeric(df[indicator], errors='coerce')
+            
+            # 删除转换失败的行
+            df = df.dropna(subset=['Molecule_ID', 'Configuration', 'Temperature(K)'])
+            
+            # 删除指标列中包含NaN的行
+            indicator_columns = [col for col in self.indicators if col in df.columns]
+            if indicator_columns:
+                df = df.dropna(subset=indicator_columns)
+            
+            if df.empty:
+                self.logger.error("过滤后没有有效数据行")
+                return False
+
             # 检查必要的列是否存在
             required_columns = ["Configuration", "Temperature(K)"] + self.indicators
             missing_columns = DataUtils.check_required_columns(df, required_columns)

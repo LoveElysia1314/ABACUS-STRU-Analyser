@@ -933,7 +933,7 @@ class MainApp:
         self.orchestrator.logger.info(f"使用调度器: {config.scheduler} (workers={workers})")
         analysis_results: List[tuple] = []
         if config.scheduler == 'process':
-            scheduler = ProcessScheduler(max_workers=workers, analyser_params=analyser_params)
+            scheduler = ProcessScheduler(max_workers=workers, analyser_params=analyser_params, log_queue=self.orchestrator.log_queue)
             reused = 0
             for rec in records:
                 pre = None

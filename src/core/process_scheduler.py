@@ -16,6 +16,22 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Any, Dict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
+
+# 全局上下文用于进程间通信
+class ProcessSchedulerContext:
+    """ProcessScheduler的全局上下文"""
+    _log_queue = None
+
+    @classmethod
+    def set_log_queue(cls, log_queue: Optional[mp.Queue]):
+        """设置日志队列"""
+        cls._log_queue = log_queue
+
+    @classmethod
+    def get_log_queue(cls) -> Optional[mp.Queue]:
+        """获取日志队列"""
+        return cls._log_queue
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +57,18 @@ def _set_single_thread_env():
 def _worker(task: ProcessAnalysisTask, analyser_params: Dict[str, Any]) -> Tuple[str, Any, float]:
     start = time.time()
     _set_single_thread_env()
+    
+    # Setup multiprocess logging for worker
+    log_queue = ProcessSchedulerContext.get_log_queue()
+    if log_queue is not None:
+        from ..utils.logmanager import LoggerManager  # type: ignore
+        LoggerManager.setup_worker_logger(
+            name="WorkerProcess",
+            queue=log_queue,
+            level=logging.INFO,
+            add_console=False
+        )
+    
     try:
         # 延迟导入（确保环境变量已生效）
         from .system_analyser import SystemAnalyser  # type: ignore
@@ -61,9 +89,11 @@ def _worker(task: ProcessAnalysisTask, analyser_params: Dict[str, Any]) -> Tuple
 
 
 class ProcessScheduler:
-    def __init__(self, max_workers: int, analyser_params: Dict[str, Any]):
+    def __init__(self, max_workers: int, analyser_params: Dict[str, Any], log_queue: Optional[mp.Queue] = None):
         self.max_workers = max_workers
         self.analyser_params = analyser_params
+        # 设置全局日志队列
+        ProcessSchedulerContext.set_log_queue(log_queue)
         self.tasks: List[ProcessAnalysisTask] = []
 
     def add_task(self, task: ProcessAnalysisTask):

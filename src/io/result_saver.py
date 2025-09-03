@@ -168,12 +168,15 @@ class ResultSaver:
         combined_dir = os.path.join(output_dir, 'combined_analysis_results')
         FileUtils.ensure_dir(combined_dir)
         csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
+        
         # 读取原有内容
         rows = []
-        if os.path.exists(csv_path):
+        file_exists = os.path.exists(csv_path)
+        if file_exists:
             old = FileUtils.safe_read_csv(csv_path, encoding='utf-8')
             if old:
                 rows.extend(old)
+        
         # 追加新内容
         for m in metrics_list:
             try:
@@ -181,8 +184,10 @@ class ResultSaver:
                 rows.append(row)
             except Exception as rexc:
                 logging.getLogger(__name__).warning(f"写入单行失败 {getattr(m,'system_name','?')}: {rexc}")
-        # 写回（原子写入）
-        FileUtils.safe_write_csv(csv_path, rows, headers=ResultSaver.SYSTEM_SUMMARY_HEADERS, encoding='utf-8-sig')
+        
+        # 写回（只有在文件不存在时才写入标题）
+        headers = None if file_exists else ResultSaver.SYSTEM_SUMMARY_HEADERS
+        FileUtils.safe_write_csv(csv_path, rows, headers=headers, encoding='utf-8-sig')
 
     @staticmethod
     def reorder_system_summary(output_dir: str) -> None:
