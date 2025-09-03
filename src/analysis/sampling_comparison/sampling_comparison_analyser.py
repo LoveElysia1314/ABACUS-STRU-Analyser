@@ -29,7 +29,7 @@ class SamplingComparisonAnalyser:
     def __init__(self):
         self.logger = LoggerManager.create_logger(__name__)
 
-    def analyse_sampling_compare(self, result_dir=None):
+    def analyse_sampling_compare(self, result_dir=None, workers: int = -1, parallel_mode: str = "process"):
         """采样效果比较分析主函数，分类型输出结果"""
         # 自动定位结果目录
         if result_dir is None:
@@ -76,11 +76,17 @@ class SamplingComparisonAnalyser:
         if os.path.exists(os.path.join(cache_dir, 'uniform.csv')):
             uniform_cache = pd.read_csv(os.path.join(cache_dir, 'uniform.csv'))
 
+
+        from src.utils.parallel_utils import run_parallel_tasks
+        import functools
+
         sampled_rows = []
         random_rows = []
         uniform_rows = []
         cache_hit = 0
         cache_miss = 0
+        tasks = []
+        cached_results = {}
         for f in files:
             system = os.path.basename(f).replace('frame_metrics_', '').replace('.csv', '')
             sampled_row = None
@@ -106,9 +112,23 @@ class SamplingComparisonAnalyser:
                 cache_hit += 1
                 continue
 
-            # 否则正常计算
-            row = self._analyze_single_system(f, system_paths)
-            if row:
+            # 未命中缓存，加入并行任务
+            tasks.append(f)
+
+        # 并行处理未命中缓存的文件
+        if tasks:
+            worker = functools.partial(self._analyze_single_system, system_paths=system_paths)
+            results = run_parallel_tasks(
+                tasks,
+                worker_fn=worker,
+                workers=workers,
+                mode=parallel_mode,
+                logger=self.logger,
+                desc="采样比较分析"
+            )
+            for row in results:
+                if not row:
+                    continue
                 cache_miss += 1
                 base_info = {
                     'System': row.get('System', ''),
@@ -409,7 +429,7 @@ class SamplingComparisonAnalyser:
 
 
 # 兼容性函数
-def analyse_sampling_compare(result_dir=None):
-    """兼容性函数，保持向后兼容"""
+def analyse_sampling_compare(result_dir=None, workers: int = -1, parallel_mode: str = "process"):
+    """兼容性函数，保持向后兼容，支持并行参数"""
     analyser = SamplingComparisonAnalyser()
-    return analyser.analyse_sampling_compare(result_dir)
+    return analyser.analyse_sampling_compare(result_dir=result_dir, workers=workers, parallel_mode=parallel_mode)

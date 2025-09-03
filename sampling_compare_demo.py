@@ -14,4 +14,9 @@ from src.analysis.sampling_comparison import analyse_sampling_compare
 
 
 if __name__ == '__main__':
-    analyse_sampling_compare()
+    import argparse
+    parser = argparse.ArgumentParser(description='采样效果比较分析器 demo')
+    parser.add_argument('--workers', type=int, default=-1, help='并行进程数，默认1（串行）')
+    parser.add_argument('--result_dir', type=str, default=None, help='分析结果目录，可选')
+    args = parser.parse_args()
+    analyse_sampling_compare(result_dir=args.result_dir, workers=args.workers)
