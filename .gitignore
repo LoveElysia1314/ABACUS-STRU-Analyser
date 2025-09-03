@@ -8,7 +8,6 @@ test_*/
 *_test/
 *_temp/
 temp_*/
-correlation_analysis_results/
 combined_analysis_results/
 
 # Python cache and compiled files

@@ -14,25 +14,11 @@ from ..core.metrics import TrajectoryMetrics
 from ..io.stru_parser import FrameData
 from ..utils import FileUtils
 from ..utils.common import ErrorHandler
-from ..core.metrics import (
-    SYSTEM_SUMMARY_HEADERS as REGISTRY_SYSTEM_SUMMARY_HEADERS,
-    build_summary_row as build_registry_summary_row,
-    SCHEMA_VERSION as SUMMARY_SCHEMA_VERSION,
-)
 
 
 class ResultSaver:
     """结果保存器类，负责保存分析结果到CSV文件"""
 
-    # CSV Headers constants
-    # Level 4+ 列顺序（进一步语义分组 & 类型聚类）
-    # 分组顺序：
-    # 1) 基础标识 & 条件 -> 2) 规模/维度 -> 3) 核心结构距离指标 -> 4) 多样性/覆盖/能量 ->
-    # 5) PCA 概览 (数量 -> 方差占比 -> 累积 -> 明细数组) -> 6) 分布/采样相似性
-    # 注意：原第7组 Mean_Structure_Coordinates 已完全移除，不再输出（PR2）。
-    # 统一来源：core.metrics.SYSTEM_SUMMARY_HEADERS
-    SYSTEM_SUMMARY_HEADERS = REGISTRY_SYSTEM_SUMMARY_HEADERS
-    SYSTEM_SUMMARY_SCHEMA_VERSION = SUMMARY_SCHEMA_VERSION
 
     @staticmethod
     def load_progress(output_dir: str) -> Dict[str, any]:
@@ -53,25 +39,7 @@ class ResultSaver:
             logger.warning(f"加载进度文件失败: {progress_path}")
             return {'processed_systems': [], 'last_updated': None}
 
-    @staticmethod
-    def _format_metric_row(metrics: TrajectoryMetrics) -> List[str]:
-        """使用统一 registry 构建行。"""
-        return build_registry_summary_row(metrics)
 
-    @staticmethod
-    def save_results(output_dir: str, analysis_results: List[Tuple]) -> None:
-        """(兼容接口) 使用流式逻辑逐体系保存；不再区分增量/完整模式。"""
-        logger = logging.getLogger(__name__)
-        for result in analysis_results or []:
-            try:
-                ResultSaver.save_single_system(output_dir, result, sampling_only=False)
-            except Exception as e:
-                logger.warning(f"批量兼容保存单体系失败(忽略): {e}")
-        # 批量调用后统一排序（若文件存在）
-        try:
-            ResultSaver.reorder_system_summary(output_dir)
-        except Exception:
-            pass
 
     # -------------------- Streaming / Per-System Saving Enhancements --------------------
     @staticmethod
@@ -84,7 +52,7 @@ class ResultSaver:
         """流式保存单个体系的全部可用结果 (体系完成后立即调用)。
 
         按当前模式与可用数据自动降级：
-          - 完整模式(result 长度>=7)：写 frame_metrics, append system_metrics_summary
+          - 完整模式(result 长度>=7)：写 frame_metrics
           - 仅采样模式/数据不足：只写采样帧信息（采样帧主要已在 analysis_targets.json 由调用方刷新）
 
         Args:
@@ -104,14 +72,7 @@ class ResultSaver:
             pca_components_data = result[4] if not sampling_only and len(result) > 4 else None
             rmsd_per_frame = result[6] if not sampling_only and len(result) > 6 else None
 
-            # 1) system_metrics_summary.csv 追加写（仅完整模式且有足够数据）
-            if not sampling_only and hasattr(metrics, 'system_name'):
-                ResultSaver.append_system_summary_rows(output_dir, [metrics])
-            elif sampling_only:
-                # 采样模式：不再导出均值结构
-                pass
-
-            # 2) frame_metrics_{system}.csv (仅完整模式)
+            # 1) frame_metrics_{system}.csv (仅完整模式)
             if (not sampling_only) and frames and pca_components_data is not None:
                 try:
                     sampled_frames = [fid for fid in getattr(metrics, 'sampled_frames', [])]
@@ -160,61 +121,7 @@ class ResultSaver:
         data['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
         FileUtils.safe_write_json(progress_path, data, encoding='utf-8', indent=2)
 
-    @staticmethod
-    def append_system_summary_rows(output_dir: str, metrics_list: Iterable) -> None:
-        """通用追加接口：向 system_metrics_summary.csv 追加多个 metrics (无排序)。"""
-        if not metrics_list:
-            return
-        combined_dir = os.path.join(output_dir, 'combined_analysis_results')
-        FileUtils.ensure_dir(combined_dir)
-        csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
-        
-        # 读取原有内容
-        rows = []
-        file_exists = os.path.exists(csv_path)
-        if file_exists:
-            old = FileUtils.safe_read_csv(csv_path, encoding='utf-8')
-            if old:
-                rows.extend(old)
-        
-        # 追加新内容
-        for m in metrics_list:
-            try:
-                row = ResultSaver._format_metric_row(m)
-                rows.append(row)
-            except Exception as rexc:
-                logging.getLogger(__name__).warning(f"写入单行失败 {getattr(m,'system_name','?')}: {rexc}")
-        
-        # 写回（只有在文件不存在时才写入标题）
-        headers = None if file_exists else ResultSaver.SYSTEM_SUMMARY_HEADERS
-        FileUtils.safe_write_csv(csv_path, rows, headers=headers, encoding='utf-8-sig')
 
-    @staticmethod
-    def reorder_system_summary(output_dir: str) -> None:
-        """读取当前 system_metrics_summary.csv 重新排序并原子覆盖。
-        仅基于 system_name 中的 mol/conf/温度数值排序。
-        """
-        combined_dir = os.path.join(output_dir, 'combined_analysis_results')
-        csv_path = os.path.join(combined_dir, 'system_metrics_summary.csv')
-        if not os.path.exists(csv_path):
-            return
-        rows = FileUtils.safe_read_csv(csv_path, encoding='utf-8')
-        if not rows or len(rows) < 2:
-            return
-        header, data_rows = rows[0], rows[1:]
-        def sort_key(row):
-            try:
-                system_name = row[0]
-                match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
-                if match:
-                    mol_id, conf, temp = match.groups()
-                    return (int(mol_id), int(conf), int(temp))
-            except Exception:
-                pass
-            return (999999, 999999, 999999)
-        data_rows.sort(key=sort_key)
-        FileUtils.safe_write_csv(csv_path, [header] + data_rows, headers=None, encoding='utf-8-sig')
-        logging.getLogger(__name__).info("system_metrics_summary.csv 已重新排序")
 
     # 已移除旧的完整/增量系统汇总保存函数，统一使用 append + reorder 机制
 
@@ -287,7 +194,6 @@ class ResultSaver:
         "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
         "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
         "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
-        "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
         "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
     ]
 

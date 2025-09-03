@@ -17,7 +17,6 @@ ABACUS-STRU-Analyser 是专为 ABACUS 分子动力学轨迹设计的高效批量
 **核心功能**：
 - 🎯 **智能采样算法**：Power Mean 贪心采样，显著提升采样质量
 - 📊 **多样性指标体系**：ANND、MPD、RMSD、Coverage Ratio、JS Divergence 等
-- 🔗 **相关性分析**：温度、构象与多样性指标的统计相关性分析
 - ⚖️ **采样方法对比**：智能采样 vs. 单次确定性随机采样 (seed=42) vs. 均匀采样
 - 🚀 **批量并行处理**：自动发现多个系统，支持体系粒度任务池，线程池/进程池高效并行（`--scheduler` 可选）
 - 🔥 **断点续算**：程序中断后自动检测进度并续算，避免重复计算
@@ -33,7 +32,6 @@ ABACUS-STRU-Analyser 是专为 ABACUS 分子动力学轨迹设计的高效批量
 - 🔬 **多物理量融合**：能量与 PCA 分量综合向量，信息全面
 - 🎯 **智能采样**：幂平均距离最大化贪心采样算法
 - 📊 **多样性指标**：ANND、MPD、RMSD、Coverage Ratio、JS Divergence 等
-- 🔗 **相关性分析**：温度、构象与多样性指标的统计相关性
 - ⚖️ **采样对比**：智能采样、随机采样、均匀采样多方法性能对比
 - 🚀 **批量并行**：自动发现多个系统，体系粒度任务池，支持线程池/进程池调度（`--scheduler`）
 - 📁 **参数隔离输出**：输出目录自动按参数组合命名
@@ -66,9 +64,6 @@ python main_abacus_analyser.py
 # 指定参数分析
 python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -w 4
 
-# 相关性分析
-python main_correlation_analyser.py
-
 # 采样方法对比
 python sampling_compare_demo.py
 ```
@@ -89,10 +84,9 @@ python sampling_compare_demo.py
 | --include_project | -i | False | 包含项目自身目录 |
 | --force_recompute | -f | False | 强制重算（忽略进度） |
 | --scheduler |  | process | 并行调度器类型（legacy=旧逻辑，process=进程池，thread=线程池，推荐process） |
-| --correlation_analysis | -c | True | 启用相关性分析 |
 | --sampling_comparison | -sc | True | 启用采样方法对比 |
 
-### 相关性分析器参数
+### 采样方法对比参数
 | 参数 | 短选项 | 默认值 | 说明 |
 |------|--------|--------|------|
 | --input | -i | auto | 输入 CSV 文件路径 |
@@ -132,7 +126,6 @@ analysis_results/
 ### 主要输出文件
 
 - **system_metrics_summary.csv**：系统级指标汇总
-- **parameter_analysis_results.csv**：相关性分析结果
 - **frame_metrics_*.csv**：单体系帧级指标
 - **sampling_methods_comparison.csv**：采样方法对比汇总
 - **progress.json**：分析进度跟踪（断点续算）
@@ -185,9 +178,6 @@ python main_abacus_analyser.py --scheduler thread
 # 兼容旧逻辑（不推荐）
 python main_abacus_analyser.py --scheduler legacy
 
-# 相关性分析
-python main_correlation_analyser.py
-
 # 采样方法对比
 python sampling_compare_demo.py
 ```
@@ -214,17 +204,11 @@ python main_abacus_analyser.py -r 0.10 -v 0.85
 # 强制重新计算
 python main_abacus_analyser.py -f
 
-# 仅进行相关性分析
-python main_abacus_analyser.py -sc false
-
 # 仅进行采样对比
-python main_abacus_analyser.py -c false
+python main_abacus_analyser.py -sc false
 
 # 指定线程池并行
 python main_abacus_analyser.py --scheduler thread -w 8
-
-# 自定义相关性分析输入
-python main_correlation_analyser.py -i custom.csv -o custom_results
 ```
 ```
 
@@ -281,7 +265,6 @@ python sampling_compare_demo.py --result_dir /path/to/analysis_results/run_r0.1_
 ### 2025-08 早期
 - 🎯 **智能采样算法**：Power Mean 贪心采样，显著提升采样质量
 - 📊 **多样性指标体系**：ANND、MPD、Coverage Ratio、JS Divergence 等
-- 🔗 **相关性分析**：温度、构象与多样性指标的统计相关性分析
 - ⚖️ **采样方法对比**：智能采样、随机采样、均匀采样性能对比
 - 🚀 **批量并行处理**：自动发现多个系统，多进程并行分析
 - 📁 **参数隔离输出**：输出目录自动按参数组合命名

@@ -268,12 +268,9 @@ class PathManager:
             return False
 
         # 检查关键结果文件
-        summary_file = os.path.join(
-            self.output_dir, "combined_analysis_results", "system_metrics_summary.csv"
-        )
         targets_file = self.targets_file
 
-        if not (os.path.exists(summary_file) and os.path.exists(targets_file)):
+        if not os.path.exists(targets_file):
             self.logger.debug("关键结果文件不存在，需要重新计算")
             return False
 

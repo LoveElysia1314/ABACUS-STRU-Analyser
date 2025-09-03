@@ -12,7 +12,6 @@ from .system_analyser import SystemAnalyser, BatchAnalyser
 from ..io.result_saver import ResultSaver
 from ..utils.common import ErrorHandler
 from ..utils.common import FileUtils
-from ..analysis.correlation_analyser import CorrelationAnalyser
 from .task_scheduler import TaskScheduler, AnalysisTask
 from .process_scheduler import ProcessScheduler, ProcessAnalysisTask
 from ..io.path_manager import lightweight_discover_systems, load_sampling_reuse_map
@@ -26,7 +25,6 @@ class AnalysisOrchestrator:
         self.path_manager = None
         self.system_analyser = None
         self.result_saver = None
-        self.correlation_analyser = None
 
     def initialize_components(self, args):
         """初始化所有分析组件"""
@@ -60,7 +58,6 @@ class AnalysisOrchestrator:
             pca_variance_ratio=args.pca_variance_ratio
         )
         self.result_saver = ResultSaver()
-        self.correlation_analyser = CorrelationAnalyser(self.logger)
 
         return self.logger
 
@@ -84,12 +81,6 @@ class AnalysisOrchestrator:
     def run_system_analysis(self, system_path: str, pre_sampled_frames: Optional[List[int]] = None):
         """运行单个系统分析"""
         return self.system_analyser.analyse_system(system_path, pre_sampled_frames=pre_sampled_frames)
-
-    def run_correlation_analysis(self, output_dir: str):
-        """运行相关性分析"""
-        # 这里可以调用相关性分析模块
-        self.logger.info("开始相关性分析...")
-        # 具体实现可以后续添加
 
     def run_sampling_evaluation(self, output_dir: str):
         """运行采样效果评估"""

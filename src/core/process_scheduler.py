@@ -42,6 +42,7 @@ class ProcessAnalysisTask:
     system_name: str
     pre_sampled_frames: Optional[List[int]]
     pre_stru_files: Optional[List[str]]
+    sampling_only: bool = False
 
 
 def _set_single_thread_env():
@@ -78,11 +79,18 @@ def _worker(task: ProcessAnalysisTask, analyser_params: Dict[str, Any]) -> Tuple
             power_p=analyser_params.get('power_p', 0.5),
             pca_variance_ratio=analyser_params.get('pca_variance_ratio', 0.90),
         )
-        result = analyser.analyse_system(
-            task.system_path,
-            pre_sampled_frames=task.pre_sampled_frames,
-            pre_stru_files=task.pre_stru_files,
-        )
+        
+        if task.sampling_only:
+            result = analyser.analyse_system_sampling_only(
+                task.system_path,
+                pre_sampled_frames=task.pre_sampled_frames
+            )
+        else:
+            result = analyser.analyse_system(
+                task.system_path,
+                pre_sampled_frames=task.pre_sampled_frames,
+                pre_stru_files=task.pre_stru_files,
+            )
         return task.system_name, result, time.time() - start
     except Exception as e:  # noqa
         return task.system_name, (None, str(e)), time.time() - start

@@ -3,7 +3,7 @@
 
 """
 ABACUS主分析器程序 - 重构版本
-功能：批量分析ABACUS分子动力学轨迹，支持智能采样和相关性分析
+功能：批量分析ABACUS分子动力学轨迹，支持智能采样
 新增：支持仅采样模式和完整分析模式
 """
 
@@ -34,12 +34,6 @@ try:
     SAMPLING_COMPARISON_AVAILABLE = True
 except ImportError:
     SAMPLING_COMPARISON_AVAILABLE = False
-
-try:
-    from src.analysis.correlation_analyser import CorrelationAnalyser as ExternalCorrelationAnalyser
-    CORRELATION_ANALYSER_AVAILABLE = True
-except ImportError:
-    CORRELATION_ANALYSER_AVAILABLE = False
 
 
 class AnalysisMode(Enum):
@@ -683,7 +677,6 @@ class AnalysisOrchestrator:
                 self.logger.info(f"检测到已有进度（{len(processed_systems)} 个已处理系统），启用增量保存模式")
             else:
                 self.logger.info("全新分析或强制重新计算，使用完整保存模式")
-            ResultSaver.save_results(self.current_output_dir, analysis_results, incremental=is_incremental)
             # 强制同步采样帧到PathManager.targets，确保analysis_targets.json包含采样信息
             path_manager.update_sampled_frames_from_results(analysis_results)
             try:
@@ -715,13 +708,10 @@ class AnalysisOrchestrator:
         self.logger.info(f"仅采样模式结果已保存，DeepMD数据目录: {os.path.join(self.current_output_dir, 'deepmd_npy_per_system')}")
     
     def run_post_analysis(self) -> None:
-        """运行后续分析（相关性分析和采样评估）"""
+        """运行后续分析（采样评估）"""
         if self.config.mode == AnalysisMode.SAMPLING_ONLY:
             self.logger.info("仅采样模式，跳过后续分析")
             return
-            
-        # 相关性分析
-        self._run_correlation_analysis()
         
         # 采样效果评估
         if self.config.enable_sampling_eval:
@@ -734,33 +724,6 @@ class AnalysisOrchestrator:
             else:
                 self._run_sampling_evaluation()
     
-    def _run_correlation_analysis(self) -> None:
-        """运行相关性分析"""
-        combined_csv_path = os.path.join(self.current_output_dir, "combined_analysis_results", "system_metrics_summary.csv")
-        combined_output_dir = os.path.join(self.current_output_dir, "combined_analysis_results")
-
-        if CORRELATION_ANALYSER_AVAILABLE and os.path.exists(combined_csv_path):
-            analyser = None
-            try:
-                analyser = ExternalCorrelationAnalyser(logger=self.logger)
-                analyser.analyse_correlations(combined_csv_path, combined_output_dir)
-                self.logger.info("相关性分析完成")
-            except Exception as e:
-                self.logger.error(f"相关性分析失败: {str(e)}")
-                import traceback
-                self.logger.error(f"详细错误信息: {traceback.format_exc()}")
-            finally:
-                if analyser and hasattr(analyser, 'cleanup'):
-                    try:
-                        analyser.cleanup()
-                    except Exception as cleanup_error:
-                        self.logger.warning(f"清理相关性分析器时出错: {str(cleanup_error)}")
-        else:
-            if not CORRELATION_ANALYSER_AVAILABLE:
-                self.logger.warning("相关性分析模块不可用，跳过相关性分析")
-            else:
-                self.logger.warning(f"系统指标文件不存在，跳过相关性分析: {combined_csv_path}")
-
     def _run_sampling_evaluation(self) -> None:
         """运行采样效果评估"""
         if not SAMPLING_COMPARISON_AVAILABLE:
@@ -1000,13 +963,6 @@ class MainApp:
         except Exception as e:
             self.orchestrator.logger.error(f"保存分析目标失败: {str(e)}")
 
-        # 流式模式：最终排序 system_metrics_summary.csv（不影响分析正确性）
-        if self.orchestrator.streaming_enabled and self.orchestrator.config.mode == AnalysisMode.FULL_ANALYSIS:
-            try:
-                ResultSaver.reorder_system_summary(output_dir)
-            except Exception as re:
-                self.orchestrator.logger.warning(f"system_metrics_summary 排序失败(忽略): {re}")
-        
         # 输出最终统计
         elapsed = time.time() - start_time
         mode_info = "仅采样模式" if self.orchestrator.config.mode == AnalysisMode.SAMPLING_ONLY else "完整分析模式"
