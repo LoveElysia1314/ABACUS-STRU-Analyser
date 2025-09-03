@@ -569,3 +569,52 @@ class FileUtils:
             logger.warning(f"Error searching for ABACUS systems in {search_path}: {e}")
 
         return mol_systems
+
+    @staticmethod
+    def discover_systems(search_paths: List[str], include_project: bool = False) -> List[str]:
+        """从多个搜索路径发现ABACUS系统目录
+
+        Args:
+            search_paths: 搜索路径列表
+            include_project: 是否包含项目级别的目录
+
+        Returns:
+            所有发现的系统路径列表
+        """
+        all_systems = []
+        
+        for search_path in search_paths:
+            try:
+                mol_systems = FileUtils.find_abacus_systems(search_path, include_project)
+                for systems in mol_systems.values():
+                    all_systems.extend(systems)
+            except Exception:
+                # 忽略单个搜索路径的错误
+                pass
+        
+        return all_systems
+
+
+class Constants:
+    """Application constants"""
+
+    # Default values
+    DEFAULT_SAMPLE_RATIO = 0.1
+    DEFAULT_POWER_P = -0.5
+    DEFAULT_MAX_WORKERS = -1
+
+    # File patterns
+    STRU_FILE_PATTERN = "STRU_MD_*"
+    OUTPUT_DIR_PATTERN = "OUT.ABACUS"
+
+    # Analysis parameters
+    MIN_FRAMES_REQUIRED = 2
+    MAX_FRAMES_WARNING = 10000
+
+    # Numerical tolerances
+    EPSILON = 1e-15
+    ZERO_THRESHOLD = 1e-12
+
+    # Logging formats
+    DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s"
+    DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"

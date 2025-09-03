@@ -63,8 +63,7 @@ class AnalysisOrchestrator:
 
     def discover_systems(self, search_paths: List[str], include_project: bool) -> List[str]:
         """发现系统目录"""
-        from ..utils import DirectoryDiscovery
-        return DirectoryDiscovery.discover_systems(search_paths, include_project)
+        return FileUtils.discover_systems(search_paths, include_project)
 
     def setup_analysis_directory(self, current_analysis_params: Dict) -> str:
         """设置分析参数专用目录"""

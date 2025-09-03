@@ -226,7 +226,6 @@ class ResultSaver:
         except Exception as e:
             logging.getLogger(__name__).warning(f"system_metrics_summary 排序失败(忽略): {e}")
 
-    @staticmethod
     # 已移除旧的完整/增量系统汇总保存函数，统一使用 append + reorder 机制
 
     @staticmethod
