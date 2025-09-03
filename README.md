@@ -27,6 +27,29 @@ ABACUS-STRU-Analyser 是专为 ABACUS 分子动力学轨迹设计的高效批量
 
 ## ✨ 主要特性
 
+---
+
+## 🧩 采样效果验证聚合器
+
+采样方法对比与指标聚合，支持缓存与增量更新：
+
+**命令行入口**：
+
+```shell
+python run_sampling_validation.py [result_dir] [--force]
+```
+
+参数说明：
+- `result_dir` 可选，分析结果目录，默认自动检测最新 run_*
+- `--force` 可选，强制重新计算所有体系
+
+输出文件：
+- `combined_analysis_results/sampling_methods_metrics_cache.csv` 采样方法指标缓存
+- `single_analysis_results/sampling_compare_enhanced.csv` 增量增强行（兼容旧逻辑）
+- `combined_analysis_results/sampling_methods_comparison.csv` 汇总统计
+
+可在主流程分析后单独运行，也可集成到自动化脚本。
+
 - ⚡ **构象向量化**：基于非氢原子对距离，自动忽略旋转/平移/缩放
 - 🧮 **PCA 降维**：主成分分析空间，所有分析在降维空间进行
 - 🔬 **多物理量融合**：能量与 PCA 分量综合向量，信息全面

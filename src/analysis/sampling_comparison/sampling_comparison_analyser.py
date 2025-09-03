@@ -30,7 +30,7 @@ class SamplingComparisonAnalyser:
         self.logger = LoggerManager.create_logger(__name__)
 
     def analyse_sampling_compare(self, result_dir=None):
-        """采样效果比较分析主函数"""
+        """采样效果比较分析主函数，分类型输出结果"""
         # 自动定位结果目录
         if result_dir is None:
             dirs = sorted(glob('analysis_results/run_*'), reverse=True)
@@ -60,15 +60,104 @@ class SamplingComparisonAnalyser:
             self.logger.warning("未找到帧指标文件")
             return
 
-        rows = []
+        # 新建分类型输出文件夹
+        cache_dir = os.path.join(result_dir, 'sampling_comparison_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+
+        import pandas as pd
+        # 读取缓存csv
+        sampled_cache = None
+        random_cache = None
+        uniform_cache = None
+        if os.path.exists(os.path.join(cache_dir, 'sampled.csv')):
+            sampled_cache = pd.read_csv(os.path.join(cache_dir, 'sampled.csv'))
+        if os.path.exists(os.path.join(cache_dir, 'random.csv')):
+            random_cache = pd.read_csv(os.path.join(cache_dir, 'random.csv'))
+        if os.path.exists(os.path.join(cache_dir, 'uniform.csv')):
+            uniform_cache = pd.read_csv(os.path.join(cache_dir, 'uniform.csv'))
+
+        sampled_rows = []
+        random_rows = []
+        uniform_rows = []
+        cache_hit = 0
+        cache_miss = 0
         for f in files:
+            system = os.path.basename(f).replace('frame_metrics_', '').replace('.csv', '')
+            sampled_row = None
+            random_row = None
+            uniform_row = None
+            if sampled_cache is not None:
+                match = sampled_cache[sampled_cache['System'] == system]
+                if not match.empty:
+                    sampled_row = match.iloc[0].to_dict()
+            if random_cache is not None:
+                match = random_cache[random_cache['System'] == system]
+                if not match.empty:
+                    random_row = match.iloc[0].to_dict()
+            if uniform_cache is not None:
+                match = uniform_cache[uniform_cache['System'] == system]
+                if not match.empty:
+                    uniform_row = match.iloc[0].to_dict()
+
+            if sampled_row and random_row and uniform_row:
+                sampled_rows.append(sampled_row)
+                random_rows.append(random_row)
+                uniform_rows.append(uniform_row)
+                cache_hit += 1
+                continue
+
+            # 否则正常计算
             row = self._analyze_single_system(f, system_paths)
             if row:
-                rows.append(row)
+                cache_miss += 1
+                base_info = {
+                    'System': row.get('System', ''),
+                    'Sample_Ratio': row.get('Sample_Ratio', ''),
+                    'Total_Frames': row.get('Total_Frames', ''),
+                    'Sampled_Frames': row.get('Sampled_Frames', '')
+                }
+                sampled_rows.append({**base_info,
+                    'ANND': row.get('ANND_sampled'),
+                    'MPD': row.get('MPD_sampled'),
+                    'Coverage_Ratio': row.get('Coverage_Ratio_sampled'),
+                    'Energy_Range': row.get('Energy_Range_sampled'),
+                    'JS_Divergence': row.get('JS_Divergence_sampled'),
+                    'RMSD_Mean': row.get('RMSD_Mean_sampled')
+                })
+                random_rows.append({**base_info,
+                    'ANND': row.get('ANND_random'),
+                    'MPD': row.get('MPD_random'),
+                    'Coverage_Ratio': row.get('Coverage_Ratio_random'),
+                    'Energy_Range': row.get('Energy_Range_random'),
+                    'JS_Divergence': row.get('JS_Divergence_random'),
+                    'RMSD_Mean': row.get('RMSD_Mean_random')
+                })
+                uniform_rows.append({**base_info,
+                    'ANND': row.get('ANND_uniform'),
+                    'MPD': row.get('MPD_uniform'),
+                    'Coverage_Ratio': row.get('Coverage_Ratio_uniform'),
+                    'Energy_Range': row.get('Energy_Range_uniform'),
+                    'JS_Divergence': row.get('JS_Divergence_uniform'),
+                    'RMSD_Mean': row.get('RMSD_Mean_uniform')
+                })
 
-        if rows:
-            self._save_comparison_results(rows, result_dir)
-            self._create_summary_table(rows, result_dir)
+        pd.DataFrame(sampled_rows).to_csv(os.path.join(cache_dir, 'sampled.csv'), index=False)
+        pd.DataFrame(random_rows).to_csv(os.path.join(cache_dir, 'random.csv'), index=False)
+        pd.DataFrame(uniform_rows).to_csv(os.path.join(cache_dir, 'uniform.csv'), index=False)
+
+        total = cache_hit + cache_miss
+        if cache_hit == total:
+            self.logger.info(f"共{total}个体系命中缓存，全部跳过计算。")
+        elif cache_hit > 0:
+            self.logger.info(f"{cache_hit}个体系命中缓存，{cache_miss}个体系重新计算。")
+        else:
+            self.logger.info(f"全部{total}个体系均重新计算。")
+
+        self.logger.info(f"采样效果分类型结果、增强版对比和汇总均已保存到 {result_dir}")
+
+        if sampled_rows:
+            self._save_comparison_results([row for row in sampled_rows], result_dir)
+            self._create_summary_table([row for row in sampled_rows], result_dir)
 
     def _analyze_single_system(self, file_path, system_paths):
         """分析单个系统的数据"""
