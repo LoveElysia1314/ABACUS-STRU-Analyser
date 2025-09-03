@@ -542,8 +542,9 @@ class WorkflowExecutor:
         mol_systems: Dict[str, List[str]] = {}
         for rec in records:
             mol_systems.setdefault(rec.mol_id, []).append(rec.system_path)
-        path_manager.load_from_discovery(records, preserve_existing=False)
-        path_manager.deduplicate_targets()
+        
+        # 修复：确保analysis_targets.json被正确加载以启用复用
+        self.orchestrator.setup_analysis_targets(path_manager, search_paths)
         
         # 采样复用 map
         reuse_map_raw = {}

@@ -237,6 +237,8 @@ class StrUParser:
             if not match:
                 continue
             frame_id = int(match.group(1))
+            if frame_id == 0:
+                continue  # 排除第0帧
             result = self.parse_file(stru_file)
             if result is None:
                 continue
