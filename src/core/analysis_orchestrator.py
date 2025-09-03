@@ -117,7 +117,16 @@ class AnalysisOrchestrator:
 
         scheduler = TaskScheduler(max_workers=max_workers)
         reused = 0
+        skipped = 0
         for rec in records:
+            # 检查是否应该跳过分析
+            if self.path_manager and hasattr(self.path_manager, 'output_dir'):
+                from ..io.result_saver import ResultSaver
+                if ResultSaver.should_skip_analysis(self.path_manager.output_dir, rec.system_name):
+                    self.logger.info(f"{rec.system_name} 体系分析文件存在，跳过分析")
+                    skipped += 1
+                    continue
+            
             pre = None
             reuse_sampling = False
             if rec.system_name in reuse_map:
@@ -133,7 +142,7 @@ class AnalysisOrchestrator:
                 pre_stru_files=rec.selected_files,
                 reuse_sampling=reuse_sampling
             ))
-        self.logger.info(f"构建任务: {len(scheduler.tasks)} (其中复用采样 {reused})")
+        self.logger.info(f"构建任务: {len(scheduler.tasks)} (其中复用采样 {reused}, 跳过 {skipped})")
         def _analyse_task(task: AnalysisTask):
             return self.system_analyser.analyse_system(
                 task.system_path,

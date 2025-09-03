@@ -21,23 +21,107 @@ class ResultSaver:
 
 
     @staticmethod
-    def load_progress(output_dir: str) -> Dict[str, any]:
-        """加载进度信息，用于断点续算
+    def should_skip_analysis(output_dir: str, system_name: str) -> bool:
+        """检查是否应该跳过体系分析
         
-        Returns:
-            包含已处理系统列表和其他进度信息的字典
-        """
-        progress_path = os.path.join(output_dir, "combined_analysis_results", "progress.json")
-        if not os.path.exists(progress_path):
-            return {'processed_systems': [], 'last_updated': None}
+        Args:
+            output_dir: 输出目录
+            system_name: 体系名称
             
-        data = FileUtils.safe_read_json(progress_path, encoding='utf-8')
-        if data is not None:
-            return data
-        else:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"加载进度文件失败: {progress_path}")
-            return {'processed_systems': [], 'last_updated': None}
+        Returns:
+            如果single_analysis_results中存在对应文件且analysis_targets.json存在，则返回True
+        """
+        # 检查single_analysis_results目录下的文件
+        single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
+        frame_metrics_file = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
+        
+        # 检查analysis_targets.json文件
+        targets_file = os.path.join(output_dir, "analysis_targets.json")
+        
+        # 如果两个文件都存在，则跳过分析
+        return os.path.exists(frame_metrics_file) and os.path.exists(targets_file)
+
+    # -------------------- 新增: 体系状态判定与直接DeepMD导出 --------------------
+    @staticmethod
+    def classify_system_status(
+        output_dir: str,
+        system_name: str,
+        sampling_meta: Optional[Dict[str, any]],
+        deepmd_root: Optional[str] = None,
+    ) -> str:
+        """判定体系当前状态以决定后续动作
+
+        状态定义（优先级）：
+          ALL_DONE: 采样列表 + 单帧指标 + deepmd 导出全部存在
+          NEED_EXPORT_ONLY: 采样列表 + 单帧指标存在，但 deepmd 缺失 → 仅执行 deepmd 导出
+          NEED_ANALYSIS_WITH_REUSED_SAMPLING: 仅存在采样列表 (单帧指标缺失) → 复用采样直接做完整分析
+          NEED_FULL_ANALYSIS: 以上条件都不满足 → 全流程重新分析
+
+        Args:
+            output_dir: run_* 实际输出目录
+            system_name: 体系名称
+            sampling_meta: analysis_targets.json 中该体系的元数据 (含 sampled_frames, source_hash 等)
+            deepmd_root: deepmd_npy_per_system 目录
+
+        Returns:
+            字符串标识的状态
+        """
+        single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
+        frame_metrics_file = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
+        metrics_exists = os.path.exists(frame_metrics_file)
+        has_sampling_list = bool(sampling_meta and sampling_meta.get('sampled_frames'))
+
+        deepmd_root = deepmd_root or os.path.join(output_dir, 'deepmd_npy_per_system')
+        deepmd_done = os.path.exists(os.path.join(deepmd_root, system_name, 'export.done'))
+
+        if has_sampling_list and metrics_exists and deepmd_done:
+            return 'ALL_DONE'
+        if has_sampling_list and metrics_exists and not deepmd_done:
+            return 'NEED_EXPORT_ONLY'
+        if has_sampling_list and not metrics_exists:
+            return 'NEED_ANALYSIS_WITH_REUSED_SAMPLING'
+        return 'NEED_FULL_ANALYSIS'
+
+    @staticmethod
+    def export_sampled_frames_direct(
+        system_path: str,
+        sampled_frame_ids: List[int],
+        output_root: str,
+        system_name: str,
+        logger: Optional[logging.Logger] = None,
+        force: bool = False,
+    ) -> Optional[str]:
+        """无需重建 FrameData / 不依赖分析结果，直接用 dpdata 导出指定帧
+
+        用于: 已有采样列表 & 单帧指标，只缺 deepmd 导出时的快速补齐。
+        """
+        logger = logger or logging.getLogger(__name__)
+        if not sampled_frame_ids:
+            logger.warning(f"[deepmd-direct] {system_name} 采样帧列表为空，跳过")
+            return None
+        target_dir = os.path.join(output_root, system_name)
+        marker_file = os.path.join(target_dir, 'export.done')
+        if os.path.isdir(target_dir) and os.path.exists(marker_file) and not force:
+            logger.info(f"[deepmd-direct] {system_name} 已存在导出，跳过 (force=False)")
+            return target_dir
+        try:
+            import dpdata  # type: ignore
+            ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
+            n_total = len(ls)
+            valid_indices = [i for i in sampled_frame_ids if 0 <= i < n_total]
+            if not valid_indices:
+                logger.warning(f"[deepmd-direct] {system_name} 无有效帧索引，跳过")
+                return None
+            sub_ls = ls[valid_indices]
+            os.makedirs(target_dir, exist_ok=True)
+            sub_ls.to_deepmd_npy(target_dir)
+            with open(marker_file, 'w', encoding='utf-8') as f:
+                f.write(f"frames={len(valid_indices)}\n")
+            logger.info(f"[deepmd-direct] 导出 {system_name} 成功，帧数={len(valid_indices)} -> {target_dir}")
+            return target_dir
+        except Exception as e:  # noqa
+            logger.error(f"[deepmd-direct] 导出 {system_name} 失败: {e}")
+            return None
 
 
 
@@ -88,12 +172,6 @@ class ResultSaver:
                 except Exception as fe:
                     logger.warning(f"单体系帧指标写入失败 {metrics.system_name}: {fe}")
 
-            # 3) 更新 progress.json
-            try:
-                ResultSaver._update_progress(output_dir, metrics.system_name)
-            except Exception as pe:
-                logger.warning(f"progress.json 更新失败 {metrics.system_name}: {pe}")
-
             # 4) 可选刷新 analysis_targets.json (由 orchestrator 提供的 hook 控制频率)
             if flush_targets_hook:
                 try:
@@ -102,28 +180,6 @@ class ResultSaver:
                     logger.warning(f"analysis_targets.json 刷新失败: {he}")
         except Exception as e:
             logger.error(f"流式保存体系结果失败: {e}")
-
-    @staticmethod
-    def _update_progress(output_dir: str, system_name: str) -> None:
-        """将单个 system_name 追加到 progress.json (幂等)"""
-        combined_dir = os.path.join(output_dir, "combined_analysis_results")
-        FileUtils.ensure_dir(combined_dir)
-        progress_path = os.path.join(combined_dir, "progress.json")
-        data = {"processed_systems": [], "last_updated": None}
-        if os.path.exists(progress_path):
-            try:
-                with open(progress_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f) or data
-            except Exception:
-                pass
-        if system_name not in data.get('processed_systems', []):
-            data['processed_systems'].append(system_name)
-        data['last_updated'] = datetime.datetime.utcnow().isoformat() + 'Z'
-        FileUtils.safe_write_json(progress_path, data, encoding='utf-8', indent=2)
-
-
-
-    # 已移除旧的完整/增量系统汇总保存函数，统一使用 append + reorder 机制
 
     @staticmethod
     def save_frame_metrics(
