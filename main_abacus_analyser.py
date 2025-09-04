@@ -143,6 +143,38 @@ def _child_worker(system_path: str):
     return analyser.analyse_system_sampling_only(system_path, pre_sampled_frames=pre_frames)
 
 
+def _deepmd_export_worker(task: tuple):
+    """DeepMD导出并行工作函数
+
+    参数
+    ------
+    task: tuple(system_path, system_name, sampled_frame_ids, output_root, force)
+    返回
+    ------
+    str | None : 成功返回 system_name, 失败返回 None
+    """
+    try:
+        system_path, system_name, sampled_frame_ids, output_root, force = task
+        if not sampled_frame_ids:
+            return None
+        import os
+        import dpdata
+        from src.io.result_saver import ResultSaver  # 局部导入以兼容子进程
+        ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md")
+        ResultSaver.export_sampled_frames_per_system(
+            frames=ls,
+            sampled_frame_ids=sampled_frame_ids,
+            system_path=system_path,
+            output_root=output_root,
+            system_name=system_name,
+            logger=None,
+            force=force
+        )
+        return system_name
+    except Exception:
+        return None
+
+
 class AnalysisOrchestrator:
     """分析流程编排器 - 核心逻辑提取"""
     
@@ -476,26 +508,51 @@ class WorkflowExecutor:
         return analysis_results, path_manager, actual_output_dir
     
     def execute_deepmd_step(self, analysis_results: List[tuple], path_manager: PathManager, actual_output_dir: str) -> None:
-        """执行DeepMD导出步骤"""
-        self.orchestrator.logger.info("开始独立DeepMD数据导出...")
-        
-        # 从已有的采样结果中导出DeepMD数据
-        deepmd_count = 0
+        """执行DeepMD导出步骤（并行化实现）"""
+        self.orchestrator.logger.info("开始独立DeepMD数据导出(支持并行)...")
+
+        # 组装任务列表
+        tasks = []
+        out_root = os.path.join(actual_output_dir, 'deepmd_npy_per_system')
+        os.makedirs(out_root, exist_ok=True)
         for result in analysis_results:
-            if result and len(result) >= 2:
-                try:
-                    system_name = result[0].system_name if hasattr(result[0], 'system_name') else str(result[0])
-                    system_path = result[0].system_path if hasattr(result[0], 'system_path') else None
-                    
-                    # 调用已有的DeepMD导出方法
-                    if system_path:
-                        self.orchestrator._export_sampled_frames(result, system_path, system_name)
-                        deepmd_count += 1
-                        self.orchestrator.logger.debug(f"独立DeepMD导出完成: {system_name}")
-                except Exception as e:
-                    self.orchestrator.logger.error(f"独立DeepMD导出失败 {system_name}: {e}")
-        
-        self.orchestrator.logger.info(f"独立DeepMD导出完成，处理了 {deepmd_count} 个体系")
+            if not result or len(result) < 2:
+                continue
+            metrics_obj = result[0]
+            sampled_frame_ids = result[1]
+            system_name = getattr(metrics_obj, 'system_name', None)
+            system_path = getattr(metrics_obj, 'system_path', None)
+            if system_name and system_path and sampled_frame_ids:
+                tasks.append((system_path, system_name, sampled_frame_ids, out_root, self.orchestrator.config.force_recompute))
+
+        if not tasks:
+            self.orchestrator.logger.warning("没有可用于DeepMD导出的任务")
+            return
+
+        workers = self.orchestrator.determine_workers()
+        if workers <= 1:
+            # 回退顺序模式
+            success = 0
+            for t in tasks:
+                name = _deepmd_export_worker(t)
+                if name:
+                    success += 1
+                    self.orchestrator.logger.debug(f"DeepMD导出完成: {name}")
+            self.orchestrator.logger.info(f"DeepMD导出完成: 成功 {success}/{len(tasks)} (顺序模式)")
+            return
+
+        from src.utils.common import run_parallel_tasks
+        self.orchestrator.logger.info(f"DeepMD导出并行启动, 任务数 {len(tasks)}, workers={workers}")
+        results = run_parallel_tasks(
+            tasks=tasks,
+            worker_fn=_deepmd_export_worker,
+            workers=workers,
+            mode="process",
+            logger=self.orchestrator.logger,
+            desc="DeepMD导出"
+        )
+        success_names = [r for r in results if r]
+        self.orchestrator.logger.info(f"DeepMD导出完成: 成功 {len(success_names)}/{len(tasks)}")
     
     def execute_sampling_compare_step(self, analysis_results: List[tuple], path_manager: PathManager, actual_output_dir: str) -> None:
         """执行采样效果对比步骤"""
