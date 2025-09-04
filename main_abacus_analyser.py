@@ -156,7 +156,7 @@ def _deepmd_export_worker(task: tuple):
     try:
         system_path, system_name, sampled_frame_ids, output_root, force = task
         if not sampled_frame_ids:
-            return None
+            return (None, "No sampled_frame_ids")
         import os
         import dpdata
         from src.io.result_saver import ResultSaver  # 局部导入以兼容子进程
@@ -170,9 +170,9 @@ def _deepmd_export_worker(task: tuple):
             logger=None,
             force=force
         )
-        return system_name
-    except Exception:
-        return None
+        return (system_name, None)
+    except Exception as e:
+        return (None, f"{type(e).__name__}: {e}")
 
 
 class AnalysisOrchestrator:
@@ -548,11 +548,19 @@ class WorkflowExecutor:
             worker_fn=_deepmd_export_worker,
             workers=workers,
             mode="process",
-            logger=self.orchestrator.logger,
+            logger=None,  # 由下方统一输出日志
             desc="DeepMD导出"
         )
-        success_names = [r for r in results if r]
-        self.orchestrator.logger.info(f"DeepMD导出完成: 成功 {len(success_names)}/{len(tasks)}")
+        success_count = 0
+        for idx, (task, res) in enumerate(zip(tasks, results)):
+            system_path, system_name, sampled_frame_ids, out_root, force = task
+            name, err = res
+            if name:
+                success_count += 1
+                self.orchestrator.logger.debug(f"DeepMD导出完成: {system_name}")
+            else:
+                self.orchestrator.logger.error(f"DeepMD导出失败: {system_name}, 错误: {err}")
+        self.orchestrator.logger.info(f"DeepMD导出完成: 成功 {success_count}/{len(tasks)}")
     
     def execute_sampling_compare_step(self, analysis_results: List[tuple], path_manager: PathManager, actual_output_dir: str) -> None:
         """执行采样效果对比步骤"""
