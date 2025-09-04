@@ -301,7 +301,7 @@ class StrUParser:
         """解析能量和力信息，并将其添加到帧数据中"""
         try:
             # 尝试导入能量力解析器
-            from ..analysis.force_energy_parser import parse_running_md_log
+            from ..analysis.trajectory_analyser import parse_running_md_log
 
             # 构建日志文件路径
             log_path = os.path.join(stru_dir, "..", "running_md.log")

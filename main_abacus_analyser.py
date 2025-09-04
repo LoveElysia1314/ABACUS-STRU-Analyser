@@ -16,7 +16,6 @@ import glob
 import json
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-from enum import Enum
 
 # 添加项目根目录到 Python 路径
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -336,7 +335,7 @@ class AnalysisOrchestrator:
     def _parallel_analysis(self, analyser: SystemAnalyser, system_paths: List[str], 
                           path_manager: PathManager, workers: int, reuse_map: Dict[str, List[int]]) -> List[tuple]:
         """并行分析系统"""
-        from src.utils.parallel_utils import run_parallel_tasks
+        from src.utils.common import run_parallel_tasks
         initializer_args = (analyser.sample_ratio, analyser.power_p, analyser.pca_variance_ratio, 
                            reuse_map, False, self.log_queue)
         

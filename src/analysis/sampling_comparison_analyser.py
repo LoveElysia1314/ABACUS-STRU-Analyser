@@ -84,7 +84,7 @@ class SamplingComparisonAnalyser:
             uniform_cache = pd.read_csv(os.path.join(cache_dir, 'uniform.csv'))
 
 
-        from src.utils.parallel_utils import run_parallel_tasks
+        from src.utils.common import run_parallel_tasks
         import functools
 
         sampled_rows = []

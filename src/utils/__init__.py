@@ -18,6 +18,7 @@ from .logmanager import LoggerManager, create_standard_logger
 from .common import DataUtils, MathUtils, ValidationUtils
 from .common import FileUtils
 from .common import Constants
+from .common import run_parallel_tasks, setup_multiprocess_logging, stop_multiprocess_logging
 
 # Re-export commonly used classes at package level
 __all__ = [
@@ -27,6 +28,10 @@ __all__ = [
     "MathUtils",
     "FileUtils",
     "Constants",
+    # Parallel execution utilities
+    "run_parallel_tasks",
+    "setup_multiprocess_logging",
+    "stop_multiprocess_logging",
     # Logging classes
     "LoggerManager",
     "create_standard_logger",
