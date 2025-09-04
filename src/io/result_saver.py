@@ -30,7 +30,7 @@ class ResultSaver:
             system_name: 体系名称
             
         Returns:
-            如果single_analysis_results中存在对应文件且analysis_targets.json存在，则返回True
+            如果single_analysis中存在对应文件且analysis_targets.json存在，则返回True
         """
         # 新/旧目录兼容
         single_dir_candidates = [os.path.join(output_dir, NEW_DIR_SINGLE),
@@ -80,8 +80,12 @@ class ResultSaver:
         Returns:
             字符串标识的状态
         """
-        single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
-        frame_metrics_file = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
+        single_analysis_dir = os.path.join(output_dir, NEW_DIR_SINGLE)
+        frame_metrics_file = os.path.join(single_analysis_dir, f"{NEW_FRAME_PREFIX}{system_name}.csv")
+        if not os.path.exists(frame_metrics_file):
+            legacy_try = os.path.join(single_analysis_dir, f"{LEGACY_FRAME_PREFIX}{system_name}.csv")
+            if os.path.exists(legacy_try):
+                frame_metrics_file = legacy_try
         metrics_exists = os.path.exists(frame_metrics_file)
         has_sampling_list = bool(sampling_meta and parse_sampled_frames(sampling_meta.get('sampled_frames')))
 
@@ -195,7 +199,7 @@ class ResultSaver:
             pca_components_data = result[4] if not sampling_only and len(result) > 4 else None
             rmsd_per_frame = result[6] if not sampling_only and len(result) > 6 else None
 
-            # 1) frame_metrics_{system}.csv (仅完整模式)
+            # 1) frame_{system}.csv (仅完整模式)
             if (not sampling_only) and frames and pca_components_data is not None:
                 try:
                     sampled_frames = [fid for fid in getattr(metrics, 'sampled_frames', [])]

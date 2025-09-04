@@ -189,14 +189,13 @@ class SamplingComparisonAnalyser:
         self.logger.info(f"采样效果分类型结果、增强版对比和汇总均已保存到 {result_dir}")
 
         if sampled_rows:
-            self._save_comparison_results([row for row in sampled_rows], result_dir)
             self._create_summary_table([row for row in sampled_rows], result_dir)
 
     def _analyze_single_system(self, file_path, system_paths):
         """分析单个系统的数据"""
         try:
             df = pd.read_csv(file_path)
-            system = os.path.basename(file_path).replace('frame_metrics_', '').replace('.csv', '')
+            system = os.path.basename(file_path).replace('frame_metrics_', '').replace('.csv', '').replace('frame_', '')
             system_path = system_paths.get(system, '')
 
             # 准备数据
@@ -357,10 +356,6 @@ class SamplingComparisonAnalyser:
                 uniform_metrics.get('RMSD_Mean')
             ),
         }
-
-    def _save_comparison_results(self, rows, result_dir):
-        """已废弃：不再输出 sampling_compare_enhanced.csv。保留空实现以兼容调用。"""
-        return
 
     def _create_summary_table(self, rows, result_dir):
         """创建汇总表格（自动读取三种采样类型缓存并合并）"""
