@@ -186,7 +186,7 @@ class SamplingComparisonAnalyser:
         else:
             self.logger.info(f"全部{total}个体系均重新计算。")
 
-        self.logger.info(f"采样效果分类型结果、增强版对比和汇总均已保存到 {result_dir}")
+        self.logger.info(f"采样效果分类型结果已保存到 {result_dir}")
 
         if sampled_rows:
             self._create_summary_table([row for row in sampled_rows], result_dir)
@@ -427,7 +427,7 @@ class SamplingComparisonAnalyser:
         # 保存汇总结果（新规范：直接写到 run_* 根目录）
         summary_path = os.path.join(result_dir, 'sampling_methods_comparison.csv')
         summary_df.to_csv(summary_path, index=False)
-        self.logger.info(f"采样方法汇总已保存(新路径): {summary_path}")
+        self.logger.info(f"采样方法汇总已保存: {summary_path}")
     # 不再写入 combined_analysis_results 目录
         self.logger.info(f"汇总体系数: {len(df_merged)}")
 

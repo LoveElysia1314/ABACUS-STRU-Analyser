@@ -308,20 +308,31 @@ class PathManager:
 
             # 检查是否所有系统都已完成
             total_systems = 0
+            completed_systems = 0
 
             for mol_data in data.get("molecules", {}).values():
-                for system_data in mol_data.get("systems", {}).values():
+                for system_name, system_data in mol_data.get("systems", {}).values():
                     total_systems += 1
+                    # 检查single_analysis目录中是否有对应的CSV文件
+                    from ..io.result_saver import ResultSaver
+                    if ResultSaver.should_skip_analysis(self.output_dir, system_name):
+                        completed_systems += 1
 
             if total_systems == 0:
                 self.logger.debug("目标文件中没有系统记录")
                 return False
 
-            # 由于不再使用 status 字段，总是返回 False 表示需要重新计算
-            self.logger.info(
-                f"发现 {total_systems} 个系统记录，将重新计算所有输出"
-            )
-            return False
+            # 如果所有系统都已完成，返回True走快速路径
+            if completed_systems == total_systems:
+                self.logger.info(
+                    f"发现完整的分析结果: {completed_systems}/{total_systems} 个系统已完成"
+                )
+                return True
+            else:
+                self.logger.info(
+                    f"分析结果不完整: {completed_systems}/{total_systems} 个系统已完成，将继续分析"
+                )
+                return False
 
         except Exception as e:
             self.logger.warning(f"检查现有结果时出错: {str(e)}")

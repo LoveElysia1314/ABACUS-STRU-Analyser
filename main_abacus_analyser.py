@@ -309,10 +309,21 @@ class AnalysisOrchestrator:
         # 获取全部分析目标
         all_targets = path_manager.get_all_targets()
 
-        pending_targets = all_targets
+        # 过滤掉已有分析结果的系统（增量计算）
+        pending_targets = []
+        skipped_count = 0
+        for target in all_targets:
+            if not self.config.force_recompute and ResultSaver.should_skip_analysis(path_manager.output_dir, target.system_name):
+                self.logger.info(f"{target.system_name} 体系分析文件存在，跳过分析")
+                skipped_count += 1
+                continue
+            pending_targets.append(target)
+        
+        if skipped_count > 0:
+            self.logger.info(f"增量计算：跳过 {skipped_count} 个已有分析结果的体系")
 
         if not pending_targets:
-            self.logger.info(f"没有需要处理的系统")
+            self.logger.info("没有需要处理的系统")
             return []
 
         # 采样复用判定
