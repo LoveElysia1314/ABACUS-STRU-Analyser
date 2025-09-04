@@ -137,7 +137,7 @@ python sampling_compare_demo.py
 ```
 analysis_results/
 └── run_r0.1_p-0.5_v0.9/           # 参数组合命名目录
-    ├── analysis_targets.json      # 分析目标系统列表
+    ├── analysis_targets.json      # 分析目标系统列表（schema v2，支持断点续算/复用/防空覆盖/参数哈希/完整性校验，sampled_frames为紧凑字符串）
     ├── combined_analysis_results/ # 汇总结果
     │   ├── system_metrics_summary.csv
     │   ├── parameter_analysis_results.csv
@@ -183,7 +183,16 @@ analysis_results/
 
 ### 智能采样算法
 - **Power Mean 采样**：幂平均距离最大化贪心采样
-- **采样复用**：基于哈希判定，无状态管理
+- **采样复用**：基于参数哈希、源数据哈希、完整性校验、状态推进等多重判定，支持断点续算与防空覆盖（不会被空采样帧覆盖历史有效结果）
+### analysis_targets.json 结构与健壮性说明
+
+- **schema_version: 2**，支持自动迁移与兼容旧格式
+- **sampled_frames** 字段统一为紧凑字符串（json.dumps(list, separators=(',', ':'))），所有读取/写入均自动解析
+- **空文件/损坏文件** 自动检测并恢复，损坏文件自动备份为 .corrupt.bak
+- **防空覆盖**：若本轮采样帧为空且历史有有效采样，自动保留历史帧，避免误覆盖
+- **参数哈希/采样参数**：每次采样均记录参数哈希与关键参数，复用时严格校验
+- **integrity/status** 字段：每个系统均有完整性校验与状态推进，便于断点续算与数据一致性
+- **atomic写入**：所有写入均为原子操作，防止中断导致文件损坏
 
 ### 热更新与断点续算
 - **进度跟踪**：自动记录已完成系统，避免重复计算

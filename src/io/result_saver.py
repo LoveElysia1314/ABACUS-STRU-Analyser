@@ -1,3 +1,11 @@
+def parse_sampled_frames(val):
+    """统一解析 analysis_targets.json 中的 sampled_frames 字段，支持字符串或列表。"""
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return []
+    return val or []
 #!/usr/bin/env python
 
 import csv
@@ -69,7 +77,7 @@ class ResultSaver:
         single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
         frame_metrics_file = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
         metrics_exists = os.path.exists(frame_metrics_file)
-        has_sampling_list = bool(sampling_meta and sampling_meta.get('sampled_frames'))
+        has_sampling_list = bool(sampling_meta and parse_sampled_frames(sampling_meta.get('sampled_frames')))
 
         deepmd_root = deepmd_root or os.path.join(output_dir, 'deepmd_npy_per_system')
         deepmd_done = os.path.exists(os.path.join(deepmd_root, system_name, 'export.done'))
@@ -102,8 +110,7 @@ class ResultSaver:
         Returns:
             字符串标识的状态
         """
-        has_sampling_list = bool(sampling_meta and sampling_meta.get('sampled_frames'))
-        
+        has_sampling_list = bool(sampling_meta and parse_sampled_frames(sampling_meta.get('sampled_frames')))
         if has_sampling_list:
             return 'SAMPLING_DONE'
         return 'NEED_SAMPLING'
@@ -414,7 +421,7 @@ class ResultSaver:
         for mol in targets['molecules'].values():
             for sys_name, sys_info in mol['systems'].items():
                 system_path = sys_info['system_path']
-                sampled_frames = json.loads(sys_info['sampled_frames']) if isinstance(sys_info['sampled_frames'], str) else sys_info['sampled_frames']
+                sampled_frames = parse_sampled_frames(sys_info['sampled_frames'])
                 if not os.path.exists(system_path):
                     logger.warning(f"System path not found: {system_path}")
                     continue

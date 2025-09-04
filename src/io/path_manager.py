@@ -12,6 +12,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ..utils.common import FileUtils
+from datetime import timezone
+
+SCHEMA_VERSION = 2  # analysis_targets.json 当前schema版本
 
 
 SYSTEM_DIR_PATTERN = re.compile(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K$")
@@ -453,8 +456,17 @@ class PathManager:
         return self.targets.copy()
 
     def save_analysis_targets(self, analysis_params: Dict[str, Any] = None) -> str:
-        """增量更新 analysis_targets.json，仅更新变更字段，保留历史信息"""
+        """保存 / 增量更新 analysis_targets.json (schema v2)
+
+        目标:
+          1. 不用空采样帧覆盖已有非空采样结果（除非新值非空）
+          2. 统一 sampled_frames 为 List[int]
+          3. 写入系统级元数据: frame_count / sampled_count / status / integrity / sampled_origin
+          4. 记录采样发生时参数信息 (params_hash_at_sampling / power_p_at_sampling / pca_ratio_at_sampling)
+          5. metadata 中写入 schema_version / writer_version / params_hash
+        """
         import copy
+
         if not self.targets_file:
             raise ValueError("输出目录未设置，请先调用 set_output_dir_for_params")
 
@@ -462,116 +474,149 @@ class PathManager:
         temp_file = targets_file + ".tmp"
 
         try:
-            # 计算参数哈希
-            params_hash = ""
-            if analysis_params:
-                params_hash = self._calculate_params_hash(analysis_params)
+            # 参数哈希
+            params_hash = self._calculate_params_hash(analysis_params) if analysis_params else ""
 
-            # 统计全局md_dumpfreq
+            # 汇总 md_dumpfreq (统一或列表)
             md_dumpfreqs = [getattr(t, 'md_dumpfreq', None) for t in self.targets]
             md_dumpfreqs = [v for v in md_dumpfreqs if isinstance(v, int) and v > 0]
             if md_dumpfreqs:
-                if all(v == md_dumpfreqs[0] for v in md_dumpfreqs):
-                    md_dumpfreq_meta = md_dumpfreqs[0]
-                else:
-                    md_dumpfreq_meta = md_dumpfreqs
+                md_dumpfreq_meta = md_dumpfreqs[0] if all(v == md_dumpfreqs[0] for v in md_dumpfreqs) else md_dumpfreqs
             else:
                 md_dumpfreq_meta = None
 
-            # 1. 读取旧文件
+            # 读取旧文件并迁移
             if os.path.exists(targets_file):
-                with open(targets_file, "r", encoding="utf-8") as f:
-                    old_data = json.load(f)
+                # 空文件保护
+                if os.path.getsize(targets_file) == 0:
+                    old_data = None
+                else:
+                    try:
+                        with open(targets_file, 'r', encoding='utf-8') as f:
+                            old_raw = f.read().strip()
+                        if not old_raw:
+                            old_data = None
+                        else:
+                            old_data = json.loads(old_raw)
+                            old_data = self._migrate_targets_data(old_data)
+                    except Exception:
+                        # 若旧文件损坏，备份后重新开始
+                        try:
+                            corrupt_backup = targets_file + '.corrupt.bak'
+                            os.replace(targets_file, corrupt_backup)
+                            self.logger.warning(f'检测到损坏的 analysis_targets.json，已备份为 {corrupt_backup} 并重新生成')
+                        except Exception:
+                            pass
+                        old_data = None
             else:
                 old_data = None
 
-            # 2. 基于旧数据就地更新
-            if old_data:
-                data = copy.deepcopy(old_data)
-                # 更新 metadata 和 summary
-                data["metadata"] = {
-                    "generated_at": datetime.now().isoformat(),
-                    "generator": "ABACUS-STRU-Analyser",
-                    "version": "1.0",
-                    "params_hash": params_hash,
-                    "analysis_params": analysis_params or {},
-                    "output_directory": self.output_dir,
-                    "md_dumpfreq": md_dumpfreq_meta,
-                }
-                data["summary"] = {
-                    "total_molecules": len(self.mol_groups),
-                    "total_systems": len(self.targets),
-                }
-                # 更新每个体系的字段
-                for mol_id, targets in self.mol_groups.items():
-                    if mol_id not in data["molecules"]:
-                        data["molecules"][mol_id] = {
-                            "molecule_id": mol_id,
-                            "system_count": len(targets),
-                            "systems": {}
-                        }
-                    for target in targets:
-                        sys_name = target.system_name
-                        # 只更新/新增本次有的体系
-                        if sys_name not in data["molecules"][mol_id]["systems"]:
-                            data["molecules"][mol_id]["systems"][sys_name] = {}
-                        # 只更新关键字段，其他字段保留
-                        sampled_frames_compact = json.dumps(target.sampled_frames, separators=(',', ':')) if target.sampled_frames else "[]"
-                        data["molecules"][mol_id]["systems"][sys_name]["system_path"] = target.system_path
-                        data["molecules"][mol_id]["systems"][sys_name]["stru_files_count"] = len(target.stru_files)
-                        data["molecules"][mol_id]["systems"][sys_name]["source_hash"] = target.source_hash
-                        data["molecules"][mol_id]["systems"][sys_name]["sampled_frames"] = sampled_frames_compact
-                # 可选：移除本次已不存在的体系（如需保留历史可不做）
-                # for mol_id in list(data["molecules"].keys()):
-                #     if mol_id not in self.mol_groups:
-                #         del data["molecules"][mol_id]
-                #     else:
-                #         for sys_name in list(data["molecules"][mol_id]["systems"].keys()):
-                #             if sys_name not in [t.system_name for t in self.mol_groups[mol_id]]:
-                #                 del data["molecules"][mol_id]["systems"][sys_name]
-            else:
-                # 没有旧数据，生成新结构
-                data = {
-                    "metadata": {
-                        "generated_at": datetime.now().isoformat(),
-                        "generator": "ABACUS-STRU-Analyser",
-                        "version": "1.0",
-                        "params_hash": params_hash,
-                        "analysis_params": analysis_params or {},
-                        "output_directory": self.output_dir,
-                        "md_dumpfreq": md_dumpfreq_meta,
-                    },
-                    "summary": {
-                        "total_molecules": len(self.mol_groups),
-                        "total_systems": len(self.targets),
-                    },
-                    "molecules": {},
-                }
-                for mol_id, targets in self.mol_groups.items():
-                    mol_data = {
-                        "molecule_id": mol_id,
-                        "system_count": len(targets),
-                        "systems": {},
-                    }
-                    for target in targets:
-                        sampled_frames_compact = json.dumps(target.sampled_frames, separators=(',', ':')) if target.sampled_frames else "[]"
-                        mol_data["systems"][target.system_name] = {
-                            "system_path": target.system_path,
-                            "stru_files_count": len(target.stru_files),
-                            "source_hash": target.source_hash,
-                            "sampled_frames": sampled_frames_compact,
-                        }
-                    data["molecules"][mol_id] = mol_data
+            data = copy.deepcopy(old_data) if old_data else {
+                "metadata": {},
+                "summary": {},
+                "molecules": {}
+            }
 
-            # 原子性写入
-            with open(temp_file, "w", encoding="utf-8") as f:
+            # metadata
+            data["metadata"] = {
+                "schema_version": SCHEMA_VERSION,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "generator": "ABACUS-STRU-Analyser",
+                "writer_version": "1.1.0",
+                "params_hash": params_hash,
+                "analysis_params": analysis_params or {},
+                "output_directory": self.output_dir,
+                "md_dumpfreq": md_dumpfreq_meta,
+            }
+
+            # summary
+            data["summary"] = {
+                "total_molecules": len(self.mol_groups),
+                "total_systems": len(self.targets),
+            }
+
+            # systems
+            for mol_id, targets in self.mol_groups.items():
+                mol_entry = data["molecules"].setdefault(mol_id, {
+                    "molecule_id": mol_id,
+                    "system_count": 0,
+                    "systems": {}
+                })
+                mol_entry["system_count"] = len(targets)
+
+                for target in targets:
+                    sys_name = target.system_name
+                    sys_entry = mol_entry["systems"].get(sys_name, {})
+
+                    # 旧采样帧
+                    old_frames_raw = sys_entry.get("sampled_frames", [])
+                    if isinstance(old_frames_raw, str):
+                        try:
+                            old_frames = json.loads(old_frames_raw)
+                        except Exception:
+                            old_frames = []
+                    else:
+                        old_frames = old_frames_raw or []
+
+                    new_frames = target.sampled_frames or []
+                    if (not new_frames) and old_frames:
+                        # 保留旧值
+                        final_frames = old_frames
+                        sampled_origin = sys_entry.get("sampled_origin", "preserved")
+                    else:
+                        final_frames = sorted({int(x) for x in new_frames if isinstance(x, int) and x >= 0})
+                        sampled_origin = "new" if not old_frames else ("updated" if final_frames != old_frames else "unchanged")
+
+                    frame_count = len(target.stru_files)
+                    sampled_count = len(final_frames)
+
+                    # 状态推进
+                    old_status = sys_entry.get("status", "discovered")
+                    new_status = self._promote_status(old_status, "sampled" if sampled_count > 0 else "discovered")
+
+                    # 完整性
+                    integrity_valid = True
+                    invalid_reason = None
+                    if sampled_count > frame_count and frame_count > 0:
+                        integrity_valid = False
+                        invalid_reason = f"sampled_count({sampled_count})>frame_count({frame_count})"
+
+                    # 记录采样参数
+                    if sampled_origin in ("new", "updated") and sampled_count > 0:
+                        sys_entry["params_hash_at_sampling"] = params_hash
+                        if analysis_params:
+                            sys_entry["power_p_at_sampling"] = analysis_params.get("power_p")
+                            sys_entry["pca_ratio_at_sampling"] = analysis_params.get("pca_variance_ratio")
+
+                    # 按需以紧凑字符串格式存储 sampled_frames 以减少文件体积
+                    sampled_frames_serialized = json.dumps(final_frames, separators=(",", ":"))
+
+                    sys_entry.update({
+                        "system_path": target.system_path,
+                        "stru_files_count": frame_count,
+                        "source_hash": target.source_hash,
+                        "frame_count": frame_count,
+                        "sampled_frames": sampled_frames_serialized,
+                        "sampled_count": sampled_count,
+                        "sampled_origin": sampled_origin,
+                        "status": new_status,
+                        "integrity": {
+                            "valid": integrity_valid,
+                            "invalid_reason": invalid_reason,
+                            "last_verified_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    })
+
+                    mol_entry["systems"][sys_name] = sys_entry
+
+            # 原子写入
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             os.replace(temp_file, targets_file)
 
             self.logger.info(f"Analysis targets saved to: {targets_file}")
             self.logger.info(f"Summary: {len(self.mol_groups)} molecules, {len(self.targets)} systems")
             self.logger.info(f"Params hash: {params_hash}")
-
             return targets_file
 
         except Exception as e:
@@ -579,9 +624,61 @@ class PathManager:
             if os.path.exists(temp_file):
                 try:
                     os.remove(temp_file)
-                except Exception as e:
-                    self.logger.warning(f"Failed to remove temporary file {temp_file}: {e}")
+                except Exception as e2:
+                    self.logger.warning(f"Failed to remove temporary file {temp_file}: {e2}")
             raise
+
+    # ---------------- schema v2 辅助方法 ----------------
+    def _migrate_targets_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """迁移旧 schema (<=1) 到 schema v2 基本结构。"""
+        try:
+            meta = data.get("metadata", {})
+            schema_v = meta.get("schema_version") or meta.get("version")
+            if schema_v == SCHEMA_VERSION:
+                return data  # 已是最新
+            # 旧版本：需要把 sampled_frames 字符串转 list；补字段
+            molecules = data.get("molecules")
+            if not molecules:
+                # 旧格式可能直接是列表（旧 load_targets 逻辑支持）——保持原状
+                return data
+            for mol in molecules.values():
+                systems = mol.get("systems", {})
+                for sys_name, sys_entry in systems.items():
+                    raw = sys_entry.get("sampled_frames", [])
+                    if isinstance(raw, str):
+                        try:
+                            sys_entry["sampled_frames"] = json.loads(raw)
+                        except Exception:
+                            sys_entry["sampled_frames"] = []
+                    if "sampled_count" not in sys_entry:
+                        sf = sys_entry.get("sampled_frames") or []
+                        sys_entry["sampled_count"] = len(sf)
+                    sys_entry.setdefault("sampled_origin", "unknown")
+                    sys_entry.setdefault("status", "sampled" if sys_entry.get("sampled_count", 0) > 0 else "discovered")
+                    sys_entry.setdefault("integrity", {
+                        "valid": True,
+                        "invalid_reason": None,
+                        "last_verified_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    # 为了兼容后续处理，仍保持为字符串紧凑格式存储
+                    if isinstance(sys_entry.get("sampled_frames"), list):
+                        try:
+                            sys_entry["sampled_frames"] = json.dumps(sys_entry["sampled_frames"], separators=(",", ":"))
+                        except Exception:
+                            pass
+            data["metadata"]["schema_version"] = SCHEMA_VERSION
+            data["metadata"]["writer_version"] = "1.1.0"
+            return data
+        except Exception:
+            return data
+
+    def _promote_status(self, old_status: str, new_status: str) -> str:
+        order = ["discovered", "sampled", "metrics", "exported"]
+        try:
+            return order[max(order.index(old_status) if old_status in order else 0,
+                             order.index(new_status) if new_status in order else 0)]
+        except Exception:
+            return new_status
 
     def load_analysis_targets(self) -> bool:
         """从新格式的 analysis_targets.json 加载分析目标"""
@@ -592,6 +689,8 @@ class PathManager:
         try:
             with open(targets_file, encoding="utf-8") as f:
                 analysis_data = json.load(f)
+            # 迁移旧 schema
+            analysis_data = self._migrate_targets_data(analysis_data)
 
             # 检查格式版本
             if "metadata" not in analysis_data or "molecules" not in analysis_data:
@@ -635,14 +734,15 @@ class PathManager:
 
                     # 兼容性：若 JSON 中缺失某些字段，使用解析出的值或安全默认值
                     # 处理sampled_frames：可能是字符串格式（紧凑模式）或列表格式
-                    sampled_frames_data = system_data.get("sampled_frames")
-                    if sampled_frames_data is None:
-                        sampled_frames_data = []
-                    elif isinstance(sampled_frames_data, str):
+                    sampled_frames_data = system_data.get("sampled_frames") or []
+                    if isinstance(sampled_frames_data, str):  # 兼容性
                         try:
                             sampled_frames_data = json.loads(sampled_frames_data)
-                        except (json.JSONDecodeError, TypeError):
+                        except Exception:
                             sampled_frames_data = []
+                    # 统一规范：排序唯一化
+                    if isinstance(sampled_frames_data, list):
+                        sampled_frames_data = sorted({int(x) for x in sampled_frames_data if isinstance(x, int) and x >= 0})
 
                     target = AnalysisTarget(
                         system_path=system_data.get("system_path", ""),
@@ -749,6 +849,7 @@ class PathManager:
         try:
             with open(self.targets_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            data = self._migrate_targets_data(data)
             molecules = data.get('molecules', {})
             # 构建两个索引：system_path 与 system_name，防止路径层级或大小写差异导致失配
             path_index = {}
@@ -757,7 +858,9 @@ class PathManager:
                 for sys_name, sys_data in mol.get('systems', {}).items():
                     rec = (
                         sys_data.get('sampled_frames'),
-                        sys_data.get('source_hash','')
+                        sys_data.get('source_hash',''),
+                        sys_data.get('params_hash_at_sampling'),
+                        sys_data.get('integrity', {}).get('valid', True)
                     )
                     sys_path = sys_data.get('system_path','')
                     if sys_path:
@@ -769,7 +872,7 @@ class PathManager:
                     rec = name_index.get(target.system_name)
                 if rec is None:
                     continue
-                sampled_raw, old_hash = rec
+                sampled_raw, old_hash, sampled_params_hash, integrity_valid = rec
                 # 解析紧凑JSON字符串
                 if isinstance(sampled_raw, str):
                     try:
@@ -778,12 +881,14 @@ class PathManager:
                         sampled_frames = []
                 else:
                     sampled_frames = sampled_raw or []
-                if (sampled_frames and old_hash and old_hash == target.source_hash):
+                # 条件：帧列表非空 + 源 hash 匹配 + integrity valid + 参数哈希匹配
+                params_match = sampled_params_hash and sampled_params_hash == getattr(self, 'current_params_hash', None)
+                if (sampled_frames and old_hash and old_hash == target.source_hash and integrity_valid and params_match):
                     target.sampled_frames = sampled_frames
                     target.reuse_sampling = True
                     reuse_map[target.system_name] = sampled_frames
             if reuse_map:
-                self.logger.info(f"采样复用: {len(reuse_map)} 个系统将跳过采样算法，仅更新其余输出")
+                self.logger.info(f"采样复用: {len(reuse_map)} 个系统 (参数/哈希/完整性校验通过)")
             else:
                 self.logger.info("采样复用: 未发现可复用的采样结果")
         except Exception as e:
@@ -902,10 +1007,13 @@ def load_sampling_reuse_map(targets_file: str) -> Dict[str, Dict[str, object]]:
                         sampled_frames = []
                 else:
                     sampled_frames = sampled_raw or []
+                if isinstance(sampled_frames, list):
+                    sampled_frames = sorted({int(x) for x in sampled_frames if isinstance(x, int) and x >= 0})
                 reuse[sys_name] = {
                     'sampled_frames': sampled_frames,
                     'source_hash': sys_data.get('source_hash', ''),
                     'system_path': sys_data.get('system_path', ''),
+                    'params_hash_at_sampling': sys_data.get('params_hash_at_sampling'),
                 }
     except Exception as e:
         logger = logging.getLogger('src.io.path_manager')
