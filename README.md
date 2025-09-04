@@ -4,7 +4,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 
-高效的 ABACUS 分子动力学轨迹分析工具 / Efficient ABACUS MD Trajectory Analysis Suite
+高效的 ABACUS 分子动力学轨迹分析工具 / Efficient ABACUS MD Trajector### 2025-09
+- ✨ **体系粒度任务池+并行调度重构**：主入口支持 --scheduler 参数，进程池/线程池/旧逻辑三种调度可选，推荐 process，极大量体系高效并行
+- 🛠 **参数解析与主流程缩进修复**：修复参数解析缩进，所有新参数（如 --scheduler）均可正常解析
+- ✨ **DeepMD 导出内聚化**：DeepMD 导出逻辑合并进 ResultSaver 并体系完成即触发
+- ⚡ **全量流式输出**：system_metrics_summary、frame_metrics、mean_structure、采样对比 CSV 均实时写入
+- 🧱 **去除旧增量/批量函数**：移除过时的 save_system_summary_incremental / 完整保存等逻辑
+- 🎯 **随机基线简化**：随机采样改为单次固定 seed=42，结果稳定可复现
+- 🧪 **采样比较列更新**：随机列改名为 *_random，不再输出 *_random_mean/_std
+- 🛠 **日志精简**：消除 "0/0 待处理" 等冗余信息，输出更聚焦
+- 🔄 **复用判定范围修正**：仅对待处理体系执行采样复用计算，避免统计矛盾
+- 🛡️ **MD参数自动解析**：从{system_path}/INPUT解析并仅持久化 expected_frame_count（移除 md_dumpfreq/md_nstep 冗余字段）
+- 📏 **帧数校验与体系过滤**：实际帧数不足预期时自动排除体系，避免无效分析
+- 🚫 **采样帧0帧排除**：帧解析流程自动排除第0帧，确保采样质量
+- 🛡️ **字段防None/[]覆盖**：所有字段复用时都不会被None或结构化占位符覆盖原有结果
+- 🛠 **若干鲁棒性修复**：异常捕获与文件原子写提升Suite
 
 > **2025-09 新特性：体系粒度任务池 + 线程池/进程池调度，极大量体系高效并行，主入口支持 --scheduler 参数切换调度器（推荐 process）**
 
@@ -192,8 +206,10 @@ analysis_results/
 - **防空覆盖**：若本轮采样帧为空且历史有有效采样，自动保留历史帧，避免误覆盖
 - **防None覆盖**：所有字段在复用时都不会被None、"" 或结构化占位符（如"[]"）覆盖原有有效值
 - **排除0帧**：帧解析流程自动排除第0帧，确保采样从第1帧开始
+- **MD参数解析**：自动从{system_path}/INPUT解析并计算 expected_frame_count（内部使用，不在 JSON 冗余存储 md_dumpfreq/md_nstep）
+- **帧数校验**：实际帧数不足预期时自动排除体系，避免无效分析（仅保留 expected_frame_count 字段）
 - **参数哈希/采样参数**：每次采样均记录参数哈希与关键参数，复用时严格校验
-- **integrity/status** 字段：每个系统均有完整性校验与状态推进，便于断点续算与数据一致性
+- **精简字段**：移除 integrity / status / sampled_origin 等冗余字段，仅保留复用所需核心信息（sampled_frames, source_hash, expected_frame_count, 参数快照）
 - **atomic写入**：所有写入均为原子操作，防止中断导致文件损坏
 
 ### 热更新与断点续算

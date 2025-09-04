@@ -60,6 +60,48 @@ class StrUParser:
             return 1
         return freq
 
+    def parse_md_parameters(self, input_file: str) -> tuple:
+        """Parse md_dumpfreq and md_nstep from an ABACUS INPUT file.
+
+        Args:
+            input_file: Absolute path to INPUT file.
+        Returns:
+            tuple: (md_dumpfreq, md_nstep). Both default to 1 if missing/invalid.
+        """
+        dumpfreq = 1
+        nstep = 1
+        try:
+            if not os.path.isfile(input_file):
+                return dumpfreq, nstep
+            with open(input_file, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    # Strip inline comments after '#'
+                    raw = line.strip()
+                    if not raw or raw.startswith('#'):
+                        continue
+                    if raw.lower().startswith('md_dumpfreq'):
+                        parts = raw.split()
+                        if len(parts) >= 2:
+                            try:
+                                val = int(float(parts[1]))
+                                if val >= 1:
+                                    dumpfreq = val
+                            except ValueError:
+                                pass
+                    elif raw.lower().startswith('md_nstep'):
+                        parts = raw.split()
+                        if len(parts) >= 2:
+                            try:
+                                val = int(float(parts[1]))
+                                if val >= 1:
+                                    nstep = val
+                            except ValueError:
+                                pass
+        except Exception:
+            # Silently fall back to defaults
+            return 1, 1
+        return dumpfreq, nstep
+
     def select_frames_by_md_dumpfreq(self, stru_files, md_dumpfreq: int):
         """Filter STRU_MD_* file list according to md_dumpfreq, excluding frame 0.
 

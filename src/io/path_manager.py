@@ -131,7 +131,7 @@ class AnalysisTarget:
     source_hash: str = ""  # 源文件哈希，用于检测源数据变更
     sampled_frames: List[int] = None  # 采样帧编号列表
     reuse_sampling: bool = False  # 是否复用既有采样结果（跳过采样算法）
-    md_dumpfreq: int = 1  # MD dump frequency from INPUT file
+    expected_frame_count: int = 0  # Expected frame count: md_nstep // md_dumpfreq
 
     def __post_init__(self):
         if self.sampled_frames is None:
@@ -331,13 +331,28 @@ class PathManager:
                 self.logger.warning(f"系统 {record.system_name} 没有找到 STRU_MD 文件")
                 continue
 
-            # 应用md_dumpfreq筛选
-            md_dumpfreq = 1  # 默认值
+            # 解析MD参数并计算预期帧数
+            md_dumpfreq = 1  # 局部变量，仅用于筛选
+            md_nstep = 1     # 局部变量，用于计算 expected_frame_count
+            expected_frame_count = 0
             try:
                 from .stru_parser import StrUParser
                 parser = StrUParser()
-                input_file = os.path.join(record.system_path, "OUT.ABACUS", "INPUT")
-                md_dumpfreq = parser.parse_md_dumpfreq(input_file)
+                input_file = os.path.join(record.system_path, "INPUT")  # 修改为从 system_path/INPUT 解析
+                md_dumpfreq, md_nstep = parser.parse_md_parameters(input_file)
+                expected_frame_count = md_nstep // md_dumpfreq
+                self.logger.info(f"系统 {record.system_name}: md_dumpfreq={md_dumpfreq}, md_nstep={md_nstep}, 预期帧数={expected_frame_count}")
+            except Exception as e:
+                self.logger.warning(f"系统 {record.system_name} 解析MD参数失败，使用默认值: {e}")
+
+            # 获取STRU文件列表
+            stru_files = glob.glob(os.path.join(record.stru_dir, "STRU_MD_*"))
+            if not stru_files:
+                self.logger.warning(f"系统 {record.system_name} 没有找到 STRU_MD 文件")
+                continue
+
+            # 应用md_dumpfreq筛选
+            try:
                 original_count = len(stru_files)
                 stru_files = parser.select_frames_by_md_dumpfreq(stru_files, md_dumpfreq)
                 if not stru_files:
@@ -347,10 +362,18 @@ class PathManager:
                     continue
                 if len(stru_files) != original_count:
                     self.logger.info(
-                        f"系统 {record.system_name}: 按 md_dumpfreq={md_dumpfreq} 筛选 {len(stru_files)}/{original_count} 帧 (包含0帧)"
+                        f"系统 {record.system_name}: 按 md_dumpfreq={md_dumpfreq} 筛选 {len(stru_files)}/{original_count} 帧 (排除0帧)"
                     )
             except Exception as e:
                 self.logger.warning(f"系统 {record.system_name} 应用 md_dumpfreq 筛选失败，使用所有帧: {e}")
+
+            # 检查实际帧数是否达到预期
+            actual_frame_count = len(stru_files)
+            if actual_frame_count < expected_frame_count:
+                self.logger.warning(
+                    f"系统 {record.system_name} 实际帧数({actual_frame_count}) < 预期帧数({expected_frame_count})，跳过该体系"
+                )
+                continue
 
             # 使用已计算的源文件哈希，避免重复计算
             source_hash = record.source_hash or self._calculate_source_hash(record.system_path)
@@ -363,7 +386,7 @@ class PathManager:
                 stru_files=stru_files,
                 creation_time=getattr(record, 'ctime', 0),
                 source_hash=source_hash,
-                md_dumpfreq=md_dumpfreq,
+                expected_frame_count=expected_frame_count,
             )
             self.targets.append(target)
             total_targets += 1
@@ -477,13 +500,7 @@ class PathManager:
             # 参数哈希
             params_hash = self._calculate_params_hash(analysis_params) if analysis_params else ""
 
-            # 汇总 md_dumpfreq (统一或列表)
-            md_dumpfreqs = [getattr(t, 'md_dumpfreq', None) for t in self.targets]
-            md_dumpfreqs = [v for v in md_dumpfreqs if isinstance(v, int) and v > 0]
-            if md_dumpfreqs:
-                md_dumpfreq_meta = md_dumpfreqs[0] if all(v == md_dumpfreqs[0] for v in md_dumpfreqs) else md_dumpfreqs
-            else:
-                md_dumpfreq_meta = None
+            # md_dumpfreq 已不再作为顶层聚合字段存储
 
             # 读取旧文件并迁移
             if os.path.exists(targets_file):
@@ -527,7 +544,6 @@ class PathManager:
                 "params_hash": params_hash,
                 "analysis_params": analysis_params or {},
                 "output_directory": self.output_dir,
-                "md_dumpfreq": md_dumpfreq_meta if md_dumpfreq_meta is not None else old_metadata.get("md_dumpfreq"),
             }
 
             # summary - 防None覆盖
@@ -572,18 +588,7 @@ class PathManager:
                     frame_count = len(target.stru_files)
                     sampled_count = len(final_frames)
 
-                    # 状态推进
-                    old_status = sys_entry.get("status", "discovered")
-                    new_status = self._promote_status(old_status, "sampled" if sampled_count > 0 else "discovered")
-
-                    # 完整性
-                    integrity_valid = True
-                    invalid_reason = None
-                    if sampled_count > frame_count and frame_count > 0:
-                        integrity_valid = False
-                        invalid_reason = f"sampled_count({sampled_count})>frame_count({frame_count})"
-
-                    # 记录采样参数 - 防None覆盖
+                    # 记录采样参数 - 防None覆盖（仍保留）
                     if sampled_origin in ("new", "updated") and sampled_count > 0:
                         if params_hash:
                             sys_entry["params_hash_at_sampling"] = params_hash
@@ -607,15 +612,11 @@ class PathManager:
                     safe_update("stru_files_count", frame_count)
                     safe_update("source_hash", target.source_hash)
                     safe_update("frame_count", frame_count)
+                    # 不再写入 md_dumpfreq / md_nstep，仅保留 expected_frame_count
+                    safe_update("expected_frame_count", target.expected_frame_count)
                     sys_entry["sampled_frames"] = sampled_frames_serialized  # 总是更新
                     sys_entry["sampled_count"] = sampled_count
-                    sys_entry["sampled_origin"] = sampled_origin
-                    sys_entry["status"] = new_status
-                    sys_entry["integrity"] = {
-                        "valid": integrity_valid,
-                        "invalid_reason": invalid_reason,
-                        "last_verified_at": datetime.now(timezone.utc).isoformat(),
-                    }
+                    # 移除 sampled_origin / status / integrity 冗余字段
 
                     mol_entry["systems"][sys_name] = sys_entry
 
@@ -663,13 +664,7 @@ class PathManager:
                     if "sampled_count" not in sys_entry:
                         sf = sys_entry.get("sampled_frames") or []
                         sys_entry["sampled_count"] = len(sf)
-                    sys_entry.setdefault("sampled_origin", "unknown")
-                    sys_entry.setdefault("status", "sampled" if sys_entry.get("sampled_count", 0) > 0 else "discovered")
-                    sys_entry.setdefault("integrity", {
-                        "valid": True,
-                        "invalid_reason": None,
-                        "last_verified_at": datetime.now(timezone.utc).isoformat(),
-                    })
+                    # 迁移时不再补充 sampled_origin/status/integrity
                     # 为了兼容后续处理，仍保持为字符串紧凑格式存储
                     if isinstance(sys_entry.get("sampled_frames"), list):
                         try:
@@ -682,13 +677,7 @@ class PathManager:
         except Exception:
             return data
 
-    def _promote_status(self, old_status: str, new_status: str) -> str:
-        order = ["discovered", "sampled", "metrics", "exported"]
-        try:
-            return order[max(order.index(old_status) if old_status in order else 0,
-                             order.index(new_status) if new_status in order else 0)]
-        except Exception:
-            return new_status
+    # _promote_status 已移除（精简冗余状态字段）
 
     def load_analysis_targets(self) -> bool:
         """从新格式的 analysis_targets.json 加载分析目标"""
@@ -763,7 +752,7 @@ class PathManager:
                         creation_time=system_data.get("creation_time", 0.0),
                         source_hash=system_data.get("source_hash", ""),
                         sampled_frames=sampled_frames_data,
-                        md_dumpfreq=system_data.get("md_dumpfreq", 1),  # 从JSON中读取或使用默认值
+                        expected_frame_count=system_data.get("expected_frame_count", 0),  # 从JSON中读取或使用默认值
                     )
                     self.targets.append(target)
                     targets_for_mol.append(target)
@@ -869,8 +858,7 @@ class PathManager:
                     rec = (
                         sys_data.get('sampled_frames'),
                         sys_data.get('source_hash',''),
-                        sys_data.get('params_hash_at_sampling'),
-                        sys_data.get('integrity', {}).get('valid', True)
+                        sys_data.get('params_hash_at_sampling')
                     )
                     sys_path = sys_data.get('system_path','')
                     if sys_path:
@@ -882,7 +870,7 @@ class PathManager:
                     rec = name_index.get(target.system_name)
                 if rec is None:
                     continue
-                sampled_raw, old_hash, sampled_params_hash, integrity_valid = rec
+                sampled_raw, old_hash, sampled_params_hash = rec
                 # 解析紧凑JSON字符串
                 if isinstance(sampled_raw, str):
                     try:
@@ -893,7 +881,7 @@ class PathManager:
                     sampled_frames = sampled_raw or []
                 # 条件：帧列表非空 + 源 hash 匹配 + integrity valid + 参数哈希匹配
                 params_match = sampled_params_hash and sampled_params_hash == getattr(self, 'current_params_hash', None)
-                if (sampled_frames and old_hash and old_hash == target.source_hash and integrity_valid and params_match):
+                if (sampled_frames and old_hash and old_hash == target.source_hash and params_match):
                     target.sampled_frames = sampled_frames
                     target.reuse_sampling = True
                     reuse_map[target.system_name] = sampled_frames
