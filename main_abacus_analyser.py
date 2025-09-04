@@ -246,7 +246,7 @@ class AnalysisOrchestrator:
             self.logger.info("未找到已有的分析目标文件，将创建新的")
         
         # 加载发现结果并去重
-        path_manager.load_from_discovery(search_paths, preserve_existing=loaded_existing)
+        path_manager.load_from_discovery(search_paths)
         path_manager.deduplicate_targets()
         
         # 参数兼容性检查
@@ -587,8 +587,6 @@ class WorkflowExecutor:
                     # 构造分析结果元组（格式: (metrics, sampled_frames)）
                     result = (metrics, sampled_frames)
                     analysis_results.append(result)
-                    self.orchestrator.logger.info(f"加载采样数据: {system_name}, 采样帧数: {len(sampled_frames)}")
-            self.orchestrator.logger.info(f"成功加载 {len(analysis_results)} 个系统的采样数据")
         except Exception as e:
             self.orchestrator.logger.error(f"读取analysis_targets.json文件失败: {e}")
             return [], path_manager, actual_output_dir
