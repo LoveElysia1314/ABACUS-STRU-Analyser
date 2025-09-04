@@ -517,7 +517,8 @@ class PathManager:
                 "molecules": {}
             }
 
-            # metadata
+            # metadata - 防None覆盖
+            old_metadata = data.get("metadata", {})
             data["metadata"] = {
                 "schema_version": SCHEMA_VERSION,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -526,13 +527,14 @@ class PathManager:
                 "params_hash": params_hash,
                 "analysis_params": analysis_params or {},
                 "output_directory": self.output_dir,
-                "md_dumpfreq": md_dumpfreq_meta,
+                "md_dumpfreq": md_dumpfreq_meta if md_dumpfreq_meta is not None else old_metadata.get("md_dumpfreq"),
             }
 
-            # summary
+            # summary - 防None覆盖
+            old_summary = data.get("summary", {})
             data["summary"] = {
-                "total_molecules": len(self.mol_groups),
-                "total_systems": len(self.targets),
+                "total_molecules": len(self.mol_groups) if self.mol_groups else old_summary.get("total_molecules", 0),
+                "total_systems": len(self.targets) if self.targets else old_summary.get("total_systems", 0),
             }
 
             # systems
@@ -581,31 +583,39 @@ class PathManager:
                         integrity_valid = False
                         invalid_reason = f"sampled_count({sampled_count})>frame_count({frame_count})"
 
-                    # 记录采样参数
+                    # 记录采样参数 - 防None覆盖
                     if sampled_origin in ("new", "updated") and sampled_count > 0:
-                        sys_entry["params_hash_at_sampling"] = params_hash
+                        if params_hash:
+                            sys_entry["params_hash_at_sampling"] = params_hash
                         if analysis_params:
-                            sys_entry["power_p_at_sampling"] = analysis_params.get("power_p")
-                            sys_entry["pca_ratio_at_sampling"] = analysis_params.get("pca_variance_ratio")
+                            if "power_p" in analysis_params:
+                                sys_entry["power_p_at_sampling"] = analysis_params["power_p"]
+                            if "pca_variance_ratio" in analysis_params:
+                                sys_entry["pca_ratio_at_sampling"] = analysis_params["pca_variance_ratio"]
 
                     # 按需以紧凑字符串格式存储 sampled_frames 以减少文件体积
                     sampled_frames_serialized = json.dumps(final_frames, separators=(",", ":"))
 
-                    sys_entry.update({
-                        "system_path": target.system_path,
-                        "stru_files_count": frame_count,
-                        "source_hash": target.source_hash,
-                        "frame_count": frame_count,
-                        "sampled_frames": sampled_frames_serialized,
-                        "sampled_count": sampled_count,
-                        "sampled_origin": sampled_origin,
-                        "status": new_status,
-                        "integrity": {
-                            "valid": integrity_valid,
-                            "invalid_reason": invalid_reason,
-                            "last_verified_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    })
+                    # 防None覆盖：保留旧值如果新值为空
+                    def safe_update(key, new_val):
+                        if new_val is not None and new_val != "":
+                            sys_entry[key] = new_val
+                        elif key not in sys_entry:
+                            sys_entry[key] = new_val
+
+                    safe_update("system_path", target.system_path)
+                    safe_update("stru_files_count", frame_count)
+                    safe_update("source_hash", target.source_hash)
+                    safe_update("frame_count", frame_count)
+                    sys_entry["sampled_frames"] = sampled_frames_serialized  # 总是更新
+                    sys_entry["sampled_count"] = sampled_count
+                    sys_entry["sampled_origin"] = sampled_origin
+                    sys_entry["status"] = new_status
+                    sys_entry["integrity"] = {
+                        "valid": integrity_valid,
+                        "invalid_reason": invalid_reason,
+                        "last_verified_at": datetime.now(timezone.utc).isoformat(),
+                    }
 
                     mol_entry["systems"][sys_name] = sys_entry
 

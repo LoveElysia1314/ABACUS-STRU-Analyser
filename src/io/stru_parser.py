@@ -61,10 +61,10 @@ class StrUParser:
         return freq
 
     def select_frames_by_md_dumpfreq(self, stru_files, md_dumpfreq: int):
-        """Filter STRU_MD_* file list according to md_dumpfreq, including frame 0.
+        """Filter STRU_MD_* file list according to md_dumpfreq, excluding frame 0.
 
-        Rule: select frames with indices i = md_dumpfreq * k, k=0,1,2,...
-        That is: all multiples of md_dumpfreq, including 0.
+        Rule: select frames with indices i = md_dumpfreq * k, k=1,2,3,... (excluding 0)
+        That is: all multiples of md_dumpfreq, but not including 0.
 
         Args:
             stru_files (List[str]): Full list of STRU_MD_* file paths.
@@ -73,14 +73,15 @@ class StrUParser:
             List[str]: Filtered list, sorted by frame index.
         """
         if md_dumpfreq <= 1:
-            # No downsampling needed (frequency 1 => every step dumped)
-            return sorted(stru_files, key=self._frame_id_from_path)
+            # No downsampling needed (frequency 1 => every step dumped), but exclude 0
+            filtered = [f for f in stru_files if self._frame_id_from_path(f) != 0]
+            return sorted(filtered, key=self._frame_id_from_path)
         filtered = []
         for f in stru_files:
             fid = self._frame_id_from_path(f)
             if fid is None:
                 continue
-            if fid % md_dumpfreq == 0:
+            if fid % md_dumpfreq == 0 and fid != 0:
                 filtered.append(f)
         return sorted(filtered, key=self._frame_id_from_path)
 
