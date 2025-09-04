@@ -62,7 +62,7 @@ python run_sampling_validation.py [result_dir] [--force]
 
 输出文件：
 - `combined_analysis_results/sampling_methods_metrics_cache.csv` 采样方法指标缓存
-- `single_analysis_results/sampling_compare_enhanced.csv` 增量增强行（兼容旧逻辑）
+    （已移除 sampling_compare_enhanced.csv，采样比较结果仅保留最终汇总 sampling_methods_comparison.csv）
 - `combined_analysis_results/sampling_methods_comparison.csv` 汇总统计
 
 可在主流程分析后单独运行，也可集成到自动化脚本。
@@ -153,39 +153,31 @@ python sampling_compare_demo.py
 
 ```
 analysis_results/
-└── run_r0.1_p-0.5_v0.9/           # 参数组合命名目录
-    ├── analysis_targets.json      # 分析目标系统列表（schema v2，支持断点续算/复用/防空覆盖/参数哈希/完整性校验，sampled_frames为紧凑字符串）
-    ├── combined_analysis_results/ # 汇总结果
-    │   ├── system_metrics_summary.csv
-    │   ├── parameter_analysis_results.csv
-    │   ├── sampling_methods_comparison.csv
-    │   └── progress.json
-    ├── single_analysis_results/   # 单体系结果
-    │   ├── frame_metrics_*.csv
-    │   └── sampling_compare_enhanced.csv
-    ├── mean_structures/           # 平均结构数据
-    │   ├── index.json
-    │   └── mean_structure_*.json
-    └── deepmd_npy_per_system/     # DeepMD 数据集
-        ├── system_name_1/
-        │   ├── type.raw
-        │   ├── set.000/
-        │   └── split_*/
-        └── system_name_2/
+└── run_r0.1_p-0.5_v0.9/              # 参数组合命名目录
+    ├── analysis_targets.json          # 体系与采样元数据（schema v2）
+    ├── sampling_methods_comparison.csv# 采样方法汇总（最终唯一汇总文件）
+    ├── single_analysis/               # 单体系帧级指标（新命名）
+    │   ├── frame_struct_mol_*_*.csv   # 帧级指标（含采样标记、能量、PCA、RMSD）
+    ├── sampling_comparison/           # 采样方法缓存（分组三表）
+    │   ├── sampled.csv
+    │   ├── random.csv
+    │   └── uniform.csv
+    └── deepmd_npy_per_system/         # DeepMD 数据（按体系）
+        └── struct_mol_*_conf_*_T*K/
+            ├── export.done
             ├── type.raw
             ├── set.000/
-            └── split_*/
+            └── ...
 ```
 
 ### 主要输出文件
 
 - **system_metrics_summary.csv**：系统级指标汇总
-- **frame_metrics_*.csv**：单体系帧级指标
-- **sampling_methods_comparison.csv**：采样方法对比汇总
-- **progress.json**：分析进度跟踪（断点续算，支持自动恢复）
-- **mean_structure_*.json**：平均结构数据
+- **frame_*.csv**：单体系帧级指标（新命名，旧 `frame_metrics_*.csv` 已弃用仍可被读取）
+- **sampling_methods_comparison.csv**：采样方法对比最终汇总（唯一保留）
+- **sampled.csv / random.csv / uniform.csv**：采样比较缓存（支持增量/断点）
 - **deepmd_npy_per_system/**：按体系 DeepMD 数据集目录
-- **sampling_compare_enhanced.csv**：采样对比增强行（兼容旧逻辑）
+    （以下已移除：combined_analysis_results/、sampling_compare_enhanced.csv、mean_structures/、progress.json）
 
 ---
 

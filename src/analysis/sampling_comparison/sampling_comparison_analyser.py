@@ -53,18 +53,28 @@ class SamplingComparisonAnalyser:
             except Exception as e:
                 self.logger.warning(f"加载系统路径映射失败: {e}")
 
-        single_dir = os.path.join(result_dir, 'single_analysis_results')
-        files = glob(os.path.join(single_dir, 'frame_metrics_*.csv'))
+        # 新旧单体系目录兼容
+        single_dir_candidates = [os.path.join(result_dir, 'single_analysis'),
+                                 os.path.join(result_dir, 'single_analysis_results')]
+        single_dir = None
+        for c in single_dir_candidates:
+            if os.path.isdir(c):
+                single_dir = c
+                break
+        if single_dir is None:
+            self.logger.warning("未找到 single_analysis 目录")
+            return
+        # 新旧文件命名兼容：frame_*.csv / frame_metrics_*.csv
+        files = glob(os.path.join(single_dir, 'frame_*.csv')) + glob(os.path.join(single_dir, 'frame_metrics_*.csv'))
 
         if not files:
             self.logger.warning("未找到帧指标文件")
             return
 
         # 新建分类型输出文件夹
-        cache_dir = os.path.join(result_dir, 'sampling_comparison_cache')
+        cache_dir = os.path.join(result_dir, 'sampling_comparison')
         os.makedirs(cache_dir, exist_ok=True)
 
-        import pandas as pd
         # 读取缓存csv
         sampled_cache = None
         random_cache = None
@@ -88,7 +98,13 @@ class SamplingComparisonAnalyser:
         tasks = []
         cached_results = {}
         for f in files:
-            system = os.path.basename(f).replace('frame_metrics_', '').replace('.csv', '')
+            base = os.path.basename(f)
+            if base.startswith('frame_metrics_'):
+                system = base[len('frame_metrics_'):-4]
+            elif base.startswith('frame_'):
+                system = base[len('frame_'):-4]
+            else:
+                continue
             sampled_row = None
             random_row = None
             uniform_row = None
@@ -346,21 +362,21 @@ class SamplingComparisonAnalyser:
         }
 
     def _save_comparison_results(self, rows, result_dir):
-        """保存比较结果"""
-        single_dir = os.path.join(result_dir, 'single_analysis_results')
-        os.makedirs(single_dir, exist_ok=True)
-        out_path = os.path.join(single_dir, 'sampling_compare_enhanced.csv')
-
-        out_df = pd.DataFrame(rows)
-        out_df.to_csv(out_path, index=False)
-        self.logger.info(f"增强版采样对比结果已保存到 {out_path}")
+        """已废弃：不再输出 sampling_compare_enhanced.csv。保留空实现以兼容调用。"""
+        return
 
     def _create_summary_table(self, rows, result_dir):
         """创建汇总表格（自动读取三种采样类型缓存并合并）"""
         import pandas as pd
         import numpy as np
         import os
-        cache_dir = os.path.join(result_dir, 'sampling_comparison_cache')
+        # 新旧缓存目录兼容
+        cache_dir_new = os.path.join(result_dir, 'sampling_comparison')
+        cache_dir_legacy = os.path.join(result_dir, 'sampling_comparison_cache')
+        if os.path.isdir(cache_dir_new):
+            cache_dir = cache_dir_new
+        else:
+            cache_dir = cache_dir_legacy
         sampled_path = os.path.join(cache_dir, 'sampled.csv')
         random_path = os.path.join(cache_dir, 'random.csv')
         uniform_path = os.path.join(cache_dir, 'uniform.csv')
@@ -416,13 +432,12 @@ class SamplingComparisonAnalyser:
 
         summary_df = pd.DataFrame(summary_rows_final)
 
-        # 保存汇总结果
-        combined_dir = os.path.join(result_dir, 'combined_analysis_results')
-        os.makedirs(combined_dir, exist_ok=True)
-        summary_path = os.path.join(combined_dir, 'sampling_methods_comparison.csv')
+        # 保存汇总结果（新规范：直接写到 run_* 根目录）
+        summary_path = os.path.join(result_dir, 'sampling_methods_comparison.csv')
         summary_df.to_csv(summary_path, index=False)
-        self.logger.info(f"均值对比汇总表格已保存到 {summary_path}")
-        self.logger.info(f"汇总了 {len(df_merged)} 个系统的数据")
+        self.logger.info(f"采样方法汇总已保存(新路径): {summary_path}")
+    # 不再写入 combined_analysis_results 目录
+        self.logger.info(f"汇总体系数: {len(df_merged)}")
 
     def _calculate_group_rmsd(self, system_path: str, frame_indices: List[int]) -> np.ndarray:
         return RMSDCalculator.calculate_group_rmsd(system_path, frame_indices, self.logger)

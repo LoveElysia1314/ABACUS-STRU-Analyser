@@ -21,6 +21,7 @@ import numpy as np
 from ..core.metrics import TrajectoryMetrics
 from ..io.stru_parser import FrameData
 from ..utils import FileUtils
+from .path_manager import NEW_DIR_SINGLE, LEGACY_DIR_SINGLE, NEW_FRAME_PREFIX, LEGACY_FRAME_PREFIX
 from ..utils.common import ErrorHandler
 
 
@@ -39,9 +40,22 @@ class ResultSaver:
         Returns:
             如果single_analysis_results中存在对应文件且analysis_targets.json存在，则返回True
         """
-        # 检查single_analysis_results目录下的文件
-        single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
-        frame_metrics_file = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
+        # 新/旧目录兼容
+        single_dir_candidates = [os.path.join(output_dir, NEW_DIR_SINGLE),
+                                 os.path.join(output_dir, LEGACY_DIR_SINGLE)]
+        single_analysis_dir = None
+        for c in single_dir_candidates:
+            if os.path.isdir(c):
+                single_analysis_dir = c
+                break
+        if single_analysis_dir is None:
+            return False
+        # 新旧命名兼容
+        frame_metrics_file = os.path.join(single_analysis_dir, f"{NEW_FRAME_PREFIX}{system_name}.csv")
+        if not os.path.exists(frame_metrics_file):
+            legacy_try = os.path.join(single_analysis_dir, f"{LEGACY_FRAME_PREFIX}{system_name}.csv")
+            if os.path.exists(legacy_try):
+                frame_metrics_file = legacy_try
         
         # 检查analysis_targets.json文件
         targets_file = os.path.join(output_dir, "analysis_targets.json")
@@ -229,11 +243,10 @@ class ResultSaver:
         Args:
             incremental: If True, append to existing file instead of overwriting
         """
-        single_analysis_dir = os.path.join(output_dir, "single_analysis_results")
+        single_analysis_dir = os.path.join(output_dir, NEW_DIR_SINGLE)
         FileUtils.ensure_dir(single_analysis_dir)
-        csv_path = os.path.join(single_analysis_dir, f"frame_metrics_{system_name}.csv")
+        csv_path = os.path.join(single_analysis_dir, f"{NEW_FRAME_PREFIX}{system_name}.csv")
 
-        # 构建表头
         headers = ["Frame_ID", "Selected", "RMSD", "Energy(eV)", "Energy_Standardized"]
         max_pc = 0
         if pca_components_data:

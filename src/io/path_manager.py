@@ -16,6 +16,16 @@ from datetime import timezone
 
 SCHEMA_VERSION = 2  # analysis_targets.json 当前schema版本
 
+# ---------------- 新输出路径规范常量（含向后兼容） ----------------
+NEW_DIR_SINGLE = "single_analysis"
+LEGACY_DIR_SINGLE = "single_analysis_results"
+NEW_DIR_SAMPLING_COMP = "sampling_comparison"
+LEGACY_DIR_SAMPLING_COMP = "sampling_comparison_cache"
+LEGACY_DIR_COMBINED = "combined_analysis_results"  # 已废弃
+
+NEW_FRAME_PREFIX = "frame_"      # 新：frame_{system}.csv
+LEGACY_FRAME_PREFIX = "frame_metrics_"  # 旧：frame_metrics_{system}.csv
+
 
 SYSTEM_DIR_PATTERN = re.compile(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K$")
 
@@ -178,6 +188,17 @@ class PathManager:
         优化策略：只对帧数最大的STRU文件计算哈希，大幅减少计算量
         """
         try:
+            # 兼容新旧目录
+            candidates = [os.path.join(self.output_dir, NEW_DIR_SINGLE),
+                          os.path.join(self.output_dir, LEGACY_DIR_SINGLE)]
+            single_results_dir = None
+            for c in candidates:
+                if os.path.isdir(c):
+                    single_results_dir = c
+                    break
+            if single_results_dir is None:
+                self.logger.info("single_analysis(旧single_analysis_results)目录不存在，跳过采样帧信息加载")
+                return
             # STRU文件实际在OUT.ABACUS/STRU文件夹中
             stru_dir = os.path.join(system_path, "OUT.ABACUS", "STRU")
             if not os.path.exists(stru_dir):
@@ -258,6 +279,9 @@ class PathManager:
         # 更新相关文件路径
         self.targets_file = os.path.join(self.output_dir, "analysis_targets.json")
         self.summary_file = os.path.join(self.output_dir, "path_summary.json")
+        # 新规范子目录（提前创建，便于下游直接使用）
+        for sub in (NEW_DIR_SINGLE, NEW_DIR_SAMPLING_COMP):
+            os.makedirs(os.path.join(self.output_dir, sub), exist_ok=True)
 
         # 确保目录存在
         os.makedirs(self.output_dir, exist_ok=True)
@@ -878,67 +902,58 @@ class PathManager:
         return reuse_map
 
     def load_sampled_frames_from_csv(self) -> None:
-        """从single_analysis_results中的CSV文件加载采样帧信息"""
+        """从单体系指标CSV加载采样帧信息，兼容新旧目录/命名。"""
         if not self.output_dir:
             self.logger.warning("输出目录未设置，无法加载采样帧信息")
             return
 
-        single_results_dir = os.path.join(self.output_dir, "single_analysis_results")
-        if not os.path.exists(single_results_dir):
-            self.logger.info("single_analysis_results目录不存在，跳过采样帧信息加载")
+        # 目录候选（新优先）
+        candidates = [os.path.join(self.output_dir, NEW_DIR_SINGLE),
+                      os.path.join(self.output_dir, LEGACY_DIR_SINGLE)]
+        single_dir = None
+        for c in candidates:
+            if os.path.isdir(c):
+                single_dir = c
+                break
+        if single_dir is None:
+            self.logger.info("未找到 single_analysis / single_analysis_results 目录，跳过采样帧加载")
             return
 
         import csv
-
-        loaded_count = 0
+        loaded = 0
         for target in self.targets:
-            # 从系统路径提取系统名称
-            system_path = target.system_path
-            system_dir_name = os.path.basename(system_path)
-            csv_filename = f"frame_metrics_{system_dir_name}.csv"
-            csv_path = os.path.join(single_results_dir, csv_filename)
-
-            # 如果找不到匹配的CSV文件，尝试使用target的system_name
-            if not os.path.exists(csv_path):
-                csv_filename = f"frame_metrics_{target.system_name}.csv"
-                csv_path = os.path.join(single_results_dir, csv_filename)
-
-            if os.path.exists(csv_path):
-                try:
-                    sampled_frames = []
-                    with open(csv_path, 'r', encoding='utf-8') as f:
-                        # 跳过注释行（以#开头的行）
-                        lines = f.readlines()
-                        data_start = 0
-                        for i, line in enumerate(lines):
-                            if not line.strip().startswith('#'):
-                                data_start = i
-                                break
-
-                        # 读取CSV数据
-                        csv_content = ''.join(lines[data_start:])
-                        reader = csv.DictReader(csv_content.splitlines())
-
-                        for row in reader:
-                            frame_id = int(row['Frame_ID'])
-                            selected = int(row['Selected'])
-                            if selected == 1:
-                                sampled_frames.append(frame_id)
-
-                    # 更新目标的采样帧信息
+            # 允许两种前缀
+            possible_names = [
+                f"{NEW_FRAME_PREFIX}{target.system_name}.csv",
+                f"{LEGACY_FRAME_PREFIX}{target.system_name}.csv"
+            ]
+            csv_path = None
+            for name in possible_names:
+                p = os.path.join(single_dir, name)
+                if os.path.exists(p):
+                    csv_path = p
+                    break
+            if not csv_path:
+                continue
+            try:
+                sampled_frames = []
+                with open(csv_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader([line for line in f if not line.startswith('#')])
+                    for row in reader:
+                        try:
+                            if int(row.get('Selected', 0)) == 1:
+                                sampled_frames.append(int(row['Frame_ID']))
+                        except Exception:
+                            continue
+                if sampled_frames:
                     target.sampled_frames = sampled_frames
-                    loaded_count += 1
-                    self.logger.debug(f"加载采样帧信息: {target.system_name} ({len(sampled_frames)} 帧)")
-
-                except Exception as e:
-                    self.logger.warning(f"读取采样帧信息失败 {target.system_name}: {str(e)}")
-            else:
-                self.logger.debug(f"采样帧CSV文件不存在: {csv_path}")
-
-        if loaded_count > 0:
-            self.logger.info(f"成功加载 {loaded_count} 个系统的采样帧信息")
+                    loaded += 1
+            except Exception as e:
+                self.logger.warning(f"解析采样帧失败 {target.system_name}: {e}")
+        if loaded:
+            self.logger.info(f"采样帧加载完成: {loaded} 个体系")
         else:
-            self.logger.info("未找到任何采样帧信息文件")
+            self.logger.info("未从CSV加载到任何采样帧")
 
     def update_sampled_frames_from_results(self, analysis_results: List[tuple]) -> None:
         """从分析结果中直接更新采样帧信息到targets"""

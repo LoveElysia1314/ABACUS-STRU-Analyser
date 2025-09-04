@@ -37,18 +37,26 @@ class _Welford:
 
 
 class StreamingSamplingComparisonManager:
-    """流式维护 sampling_compare_enhanced.csv 与最终 sampling_methods_comparison.csv 聚合。"""
+    """流式维护采样方法统计（不再输出 sampling_compare_enhanced.csv）。"""
 
     def __init__(self, result_dir: str, logger: Optional[logging.Logger] = None):
         self.result_dir = result_dir
         self.logger = logger or logging.getLogger(__name__)
-        self.single_dir = os.path.join(result_dir, 'single_analysis_results')
+        # 新旧目录兼容与迁移
+        legacy_single = os.path.join(result_dir, 'single_analysis_results')
+        new_single = os.path.join(result_dir, 'single_analysis')
+        if os.path.isdir(legacy_single) and not os.path.isdir(new_single):
+            # 不做移动，仅创建新目录用于后续写入
+            pass
+        self.single_dir = new_single
         FileUtils.ensure_dir(self.single_dir)
-        self.combined_dir = os.path.join(result_dir, 'combined_analysis_results')
-        FileUtils.ensure_dir(self.combined_dir)
-        self.row_csv_path = os.path.join(self.single_dir, 'sampling_compare_enhanced.csv')
-        self.state_path = os.path.join(self.combined_dir, 'sampling_methods_state.json')
-        self.final_summary_path = os.path.join(self.combined_dir, 'sampling_methods_comparison.csv')
+        # 采样比较缓存目录
+        self.sampling_dir = os.path.join(result_dir, 'sampling_comparison')
+        FileUtils.ensure_dir(self.sampling_dir)
+    # 状态文件
+        self.state_path = os.path.join(self.sampling_dir, 'sampling_methods_state.json')
+        # 最终汇总文件直接放在 run_* 根目录
+        self.final_summary_path = os.path.join(result_dir, 'sampling_methods_comparison.csv')
         self._init_state()
 
     def _init_state(self):
@@ -144,14 +152,7 @@ class StreamingSamplingComparisonManager:
                 self._welford_update_dict(self.state[metric]['random'], random_mean_val)
                 self._welford_update_dict(self.state[metric]['uniform'], uniform_val)
 
-            # 追加写 CSV
-            file_exists = os.path.exists(self.row_csv_path)
-            with open(self.row_csv_path, 'a' if file_exists else 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=row.keys())
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(row)
-            # 持久化 state
+            # 持久化 state（不再写增强CSV）
             self._persist_state()
         except Exception as e:
             self.logger.warning(f"流式采样比较更新失败 {system_name}: {e}")
