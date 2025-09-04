@@ -6,7 +6,6 @@
 """
 
 import os
-import logging
 import numpy as np
 import pandas as pd
 from glob import glob
@@ -15,9 +14,7 @@ import warnings
 
 from ...utils import LoggerManager
 from ...core.metrics import MetricsToolkit
-from ...core.sampler import SamplingStrategy, calculate_improvement, calculate_significance
-from ...core.metrics import get_headers_by_categories
-from ...io.stru_parser import StrUParser
+from ...core.sampler import SamplingStrategy, calculate_improvement
 from ...core.system_analyser import RMSDCalculator
 
 warnings.filterwarnings('ignore')

@@ -8,21 +8,13 @@ def parse_sampled_frames(val):
     return val or []
 #!/usr/bin/env python
 
-import csv
 import logging
 import os
-from typing import Optional, List, Dict, Tuple, Sequence, Iterable
-import datetime
+from typing import Optional, List, Dict, Tuple, Sequence
 import json
-import re
-
-import numpy as np
-
-from ..core.metrics import TrajectoryMetrics
 from ..io.stru_parser import FrameData
 from ..utils import FileUtils
 from .path_manager import NEW_DIR_SINGLE, LEGACY_DIR_SINGLE, NEW_FRAME_PREFIX, LEGACY_FRAME_PREFIX
-from ..utils.common import ErrorHandler
 
 
 class ResultSaver:

@@ -6,9 +6,8 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 
 from ...core.metrics import MetricsToolkit
-from ...core.sampler import SamplingStrategy, calculate_improvement, calculate_significance
+from ...core.sampler import SamplingStrategy
 from ...core.system_analyser import RMSDCalculator
-from ...io.stru_parser import StrUParser
 from ...utils import FileUtils
 
 

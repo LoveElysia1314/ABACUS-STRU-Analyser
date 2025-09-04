@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import json
 
 import numpy as np
-from scipy.spatial.distance import pdist, cdist, squareform
-from scipy.stats import entropy, wasserstein_distance
+from scipy.spatial.distance import pdist, squareform
+from scipy.stats import entropy
 from sklearn.decomposition import PCA
 
 from ..utils import Constants, ValidationUtils

@@ -3,7 +3,6 @@
 适用于主流程批量任务的通用模板
 """
 import os
-from typing import List, Dict, Any, Tuple
 
 def prepare_sampling_only_tasks(records, config, path_manager, ResultSaver, logger=None):
     """

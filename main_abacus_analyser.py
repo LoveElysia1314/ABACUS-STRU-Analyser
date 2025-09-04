@@ -13,7 +13,6 @@ import logging
 import multiprocessing as mp
 import glob
 import json
-import csv
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -25,7 +24,6 @@ from src.core.system_analyser import SystemAnalyser
 from src.io.result_saver import ResultSaver
 from src.utils.common import ErrorHandler
 from src.utils.common import FileUtils
-from src.core.process_scheduler import ProcessScheduler, ProcessAnalysisTask
 
 
 class AnalysisStep(Enum):

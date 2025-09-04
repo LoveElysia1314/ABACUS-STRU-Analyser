@@ -8,9 +8,8 @@ from typing import List, Dict, Optional
 
 from ..utils.logmanager import LoggerManager
 from ..io.path_manager import PathManager
-from .system_analyser import SystemAnalyser, BatchAnalyser
+from .system_analyser import SystemAnalyser
 from ..io.result_saver import ResultSaver
-from ..utils.common import ErrorHandler
 from ..utils.common import FileUtils
 from .task_scheduler import TaskScheduler, AnalysisTask
 from .process_scheduler import ProcessScheduler, ProcessAnalysisTask
