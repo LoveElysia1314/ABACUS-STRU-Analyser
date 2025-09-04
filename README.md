@@ -81,13 +81,25 @@ pip install numpy>=1.25 pandas>=2.2 scipy>=1.10 scikit-learn>=1.3 dpdata>=0.2.18
 
 ### 基本用法
 ```bash
-# 分析当前目录
+# 分析当前目录（自动进程池并行，推荐）
 python main_abacus_analyser.py
 
-# 指定参数分析
-python main_abacus_analyser.py -r 0.05 -p -0.5 -v 0.90 -w 4
+# 指定参数分析（进程池并行）
+python main_abacus_analyser.py -r 0.1 -p -0.5 -v 0.95 -w 4 --scheduler process
 
-# 采样方法对比
+# 仅采样（跳过统计指标）
+python main_abacus_analyser.py --sampling_only
+
+# 仅采样对比
+python main_abacus_analyser.py --sampling_compare
+
+# 指定执行步骤
+python main_abacus_analyser.py --steps 1 3
+
+# 多路径搜索
+python main_abacus_analyser.py -s /data/exp1 /data/exp2
+
+# 采样方法对比（单独脚本）
 python sampling_compare_demo.py
 ```
 
@@ -98,16 +110,18 @@ python sampling_compare_demo.py
 ### 主分析器参数
 | 参数 | 短选项 | 默认值 | 说明 |
 |------|--------|--------|------|
-| --sample_ratio | -r | 0.05 | 采样比例 |
+| --sample_ratio | -r | 0.1 | 采样比例 |
 | --power_p | -p | -0.5 | 幂平均距离 p 值 |
-| --pca_variance_ratio | -v | 0.90 | PCA 累计方差贡献率 |
+| --pca_variance_ratio | -v | 0.95 | PCA 累计方差贡献率 |
 | --workers | -w | -1 | 并行进程数 (-1=自动) |
 | --output_dir | -o | analysis_results | 输出目录 |
-| --search_path | -s | 当前目录父目录 | 搜索路径 |
+| --search_path | -s | 当前目录父目录 | 搜索路径（支持多个，空则为上级目录） |
 | --include_project | -i | False | 包含项目自身目录 |
 | --force_recompute | -f | False | 强制重算（忽略进度） |
 | --scheduler |  | process | 并行调度器类型（legacy=旧逻辑，process=进程池，thread=线程池，推荐process） |
-| --sampling_comparison | -sc | True | 启用采样方法对比 |
+| --steps |  | [1,2,3] | 执行分析步骤（1=采样, 2=DeepMD导出, 3=采样对比）|
+| --sampling_only |  | False | 仅采样模式（等价于 --steps 1）|
+| --sampling_compare |  | False | 采样对比模式（等价于 --steps 3）|
 
 ### 采样方法对比参数
 | 参数 | 短选项 | 默认值 | 说明 |
@@ -151,9 +165,10 @@ analysis_results/
 - **system_metrics_summary.csv**：系统级指标汇总
 - **frame_metrics_*.csv**：单体系帧级指标
 - **sampling_methods_comparison.csv**：采样方法对比汇总
-- **progress.json**：分析进度跟踪（断点续算）
+- **progress.json**：分析进度跟踪（断点续算，支持自动恢复）
 - **mean_structure_*.json**：平均结构数据
 - **deepmd_npy_per_system/**：按体系 DeepMD 数据集目录
+- **sampling_compare_enhanced.csv**：采样对比增强行（兼容旧逻辑）
 
 ---
 
@@ -175,13 +190,14 @@ analysis_results/
 - **增量保存**：边计算边写入，支持实时数据持久化
 - **智能检测**：程序重启时自动检测并跳过已处理系统
 - **数据完整性**：确保程序中断时数据不丢失
+- **流式/实时输出**：所有可确定的单体系与汇总文件即时写入，崩溃后仍可恢复
 
 ### 采样方法对比
 - **智能采样**：Power Mean 贪心算法
-- **随机采样（单次、确定性）**：使用固定 seed=42，保证结果可复现。
+- **随机采样（单次、确定性）**：使用固定 seed=42，保证结果可复现（当前版本不再输出多次均值/标准差，随机列仅为 *_random）。
 - **均匀采样**：等间隔采样
 - **评估指标**：ANND、MPD、Coverage Ratio、JS Divergence、RMSD、Energy Range 等
-> 若需要多次随机统计（均值/标准差）可回退旧版本或自行循环调用接口。
+> 若需多次随机统计（均值/标准差）请回退旧版本或自行多次运行聚合。
 
 ---
 
@@ -250,8 +266,8 @@ python sampling_compare_demo.py --result_dir /path/to/analysis_results/run_r0.1_
 
 ### 常见问题
 - **采样比较结果出现 NaN**：该指标样本不足或输入列缺失
-- **为何随机列没有 std**：当前版本仅执行单次确定性随机采样（seed=42）以保证可复现
-- **需要多次随机统计**：自行多次运行并聚合，或修改 `_run_random_sampling_comparison`
+- **为何随机列没有 std**：当前版本仅执行单次确定性随机采样（seed=42），随机列仅 *_random，无均值/标准差
+- **需要多次随机统计**：请自行多次运行并聚合，或回退旧版本
 - **F 值 / p 值 是 NaN**：样本量不足或只有单次随机，显著性检验被跳过
 - **分析速度慢**：提高 `-r`、降低 `-v`、增加 `-w`，或使用 `--sampling_only`
 - **内存不足**：降低采样比例或限制并行数 `-w 1`
