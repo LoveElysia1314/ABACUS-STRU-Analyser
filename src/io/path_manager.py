@@ -453,7 +453,8 @@ class PathManager:
         return self.targets.copy()
 
     def save_analysis_targets(self, analysis_params: Dict[str, Any] = None) -> str:
-        """保存分析目标到 analysis_targets.json，包含详细的哈希和状态信息"""
+        """增量更新 analysis_targets.json，仅更新变更字段，保留历史信息"""
+        import copy
         if not self.targets_file:
             raise ValueError("输出目录未设置，请先调用 set_output_dir_for_params")
 
@@ -466,11 +467,9 @@ class PathManager:
             if analysis_params:
                 params_hash = self._calculate_params_hash(analysis_params)
 
-            # 统计全局md_dumpfreq（如有多个体系，取最大值/最小值/列表？此处取所有target的md_dumpfreq，若无则为None）
+            # 统计全局md_dumpfreq
             md_dumpfreqs = [getattr(t, 'md_dumpfreq', None) for t in self.targets]
-            # 只保留有效int
             md_dumpfreqs = [v for v in md_dumpfreqs if isinstance(v, int) and v > 0]
-            # 若所有体系md_dumpfreq一致，则写单值，否则写列表
             if md_dumpfreqs:
                 if all(v == md_dumpfreqs[0] for v in md_dumpfreqs):
                     md_dumpfreq_meta = md_dumpfreqs[0]
@@ -479,9 +478,18 @@ class PathManager:
             else:
                 md_dumpfreq_meta = None
 
-            # 生成JSON结构
-            analysis_data = {
-                "metadata": {
+            # 1. 读取旧文件
+            if os.path.exists(targets_file):
+                with open(targets_file, "r", encoding="utf-8") as f:
+                    old_data = json.load(f)
+            else:
+                old_data = None
+
+            # 2. 基于旧数据就地更新
+            if old_data:
+                data = copy.deepcopy(old_data)
+                # 更新 metadata 和 summary
+                data["metadata"] = {
                     "generated_at": datetime.now().isoformat(),
                     "generator": "ABACUS-STRU-Analyser",
                     "version": "1.0",
@@ -489,69 +497,90 @@ class PathManager:
                     "analysis_params": analysis_params or {},
                     "output_directory": self.output_dir,
                     "md_dumpfreq": md_dumpfreq_meta,
-                },
-                "summary": {
+                }
+                data["summary"] = {
                     "total_molecules": len(self.mol_groups),
                     "total_systems": len(self.targets),
-                },
-                "molecules": {},
-            }
-
-            # 按分子组织数据
-            for mol_id, targets in self.mol_groups.items():
-                mol_data = {
-                    "molecule_id": mol_id,
-                    "system_count": len(targets),
-                    "systems": {},
                 }
-
-                for target in targets:
-                    # 简化输出：移除每个系统的 params_hash，只在 metadata 保存一次
-                    # 将sampled_frames转换为紧凑格式，避免多行显示
-                    sampled_frames_compact = None
-                    if target.sampled_frames:
-                        sampled_frames_compact = json.dumps(target.sampled_frames, separators=(',', ':'))
-
-                    system_data = {
-                        "system_path": target.system_path,
-                        "stru_files_count": len(target.stru_files),
-                        "source_hash": target.source_hash,
+                # 更新每个体系的字段
+                for mol_id, targets in self.mol_groups.items():
+                    if mol_id not in data["molecules"]:
+                        data["molecules"][mol_id] = {
+                            "molecule_id": mol_id,
+                            "system_count": len(targets),
+                            "systems": {}
+                        }
+                    for target in targets:
+                        sys_name = target.system_name
+                        # 只更新/新增本次有的体系
+                        if sys_name not in data["molecules"][mol_id]["systems"]:
+                            data["molecules"][mol_id]["systems"][sys_name] = {}
+                        # 只更新关键字段，其他字段保留
+                        sampled_frames_compact = json.dumps(target.sampled_frames, separators=(',', ':')) if target.sampled_frames else "[]"
+                        data["molecules"][mol_id]["systems"][sys_name]["system_path"] = target.system_path
+                        data["molecules"][mol_id]["systems"][sys_name]["stru_files_count"] = len(target.stru_files)
+                        data["molecules"][mol_id]["systems"][sys_name]["source_hash"] = target.source_hash
+                        data["molecules"][mol_id]["systems"][sys_name]["sampled_frames"] = sampled_frames_compact
+                # 可选：移除本次已不存在的体系（如需保留历史可不做）
+                # for mol_id in list(data["molecules"].keys()):
+                #     if mol_id not in self.mol_groups:
+                #         del data["molecules"][mol_id]
+                #     else:
+                #         for sys_name in list(data["molecules"][mol_id]["systems"].keys()):
+                #             if sys_name not in [t.system_name for t in self.mol_groups[mol_id]]:
+                #                 del data["molecules"][mol_id]["systems"][sys_name]
+            else:
+                # 没有旧数据，生成新结构
+                data = {
+                    "metadata": {
+                        "generated_at": datetime.now().isoformat(),
+                        "generator": "ABACUS-STRU-Analyser",
+                        "version": "1.0",
+                        "params_hash": params_hash,
+                        "analysis_params": analysis_params or {},
+                        "output_directory": self.output_dir,
+                        "md_dumpfreq": md_dumpfreq_meta,
+                    },
+                    "summary": {
+                        "total_molecules": len(self.mol_groups),
+                        "total_systems": len(self.targets),
+                    },
+                    "molecules": {},
+                }
+                for mol_id, targets in self.mol_groups.items():
+                    mol_data = {
+                        "molecule_id": mol_id,
+                        "system_count": len(targets),
+                        "systems": {},
                     }
-                    # 始终添加sampled_frames字段，确保采样列表被输出到JSON中
-                    if sampled_frames_compact is not None:
-                        system_data["sampled_frames"] = sampled_frames_compact
-                    else:
-                        # 即使为空也添加该字段，避免字段缺失
-                        system_data["sampled_frames"] = "[]"
-                    mol_data["systems"][target.system_name] = system_data
+                    for target in targets:
+                        sampled_frames_compact = json.dumps(target.sampled_frames, separators=(',', ':')) if target.sampled_frames else "[]"
+                        mol_data["systems"][target.system_name] = {
+                            "system_path": target.system_path,
+                            "stru_files_count": len(target.stru_files),
+                            "source_hash": target.source_hash,
+                            "sampled_frames": sampled_frames_compact,
+                        }
+                    data["molecules"][mol_id] = mol_data
 
-                analysis_data["molecules"][mol_id] = mol_data
-
-            # 原子性写入：先写临时文件，再重命名
+            # 原子性写入
             with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(analysis_data, f, indent=2, ensure_ascii=False)
-
-            # 原子性重命名
+                json.dump(data, f, indent=2, ensure_ascii=False)
             os.replace(temp_file, targets_file)
 
             self.logger.info(f"Analysis targets saved to: {targets_file}")
-            self.logger.info(
-                f"Summary: {len(self.mol_groups)} molecules, {len(self.targets)} systems"
-            )
+            self.logger.info(f"Summary: {len(self.mol_groups)} molecules, {len(self.targets)} systems")
             self.logger.info(f"Params hash: {params_hash}")
 
             return targets_file
 
         except Exception as e:
             self.logger.error(f"Failed to save analysis targets: {str(e)}")
-            # 清理临时文件
             if os.path.exists(temp_file):
                 try:
                     os.remove(temp_file)
                 except Exception as e:
-                    self.logger.warning(
-                        f"Failed to remove temporary file {temp_file}: {e}"
-                    )
+                    self.logger.warning(f"Failed to remove temporary file {temp_file}: {e}")
             raise
 
     def load_analysis_targets(self) -> bool:
