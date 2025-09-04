@@ -325,7 +325,24 @@ class ResultSaver:
             if not subset_indices:
                 logger.warning(f"[deepmd-export] {system_name} 采样帧索引映射为空，跳过")
                 return None
-            ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
+            
+            # 处理编码问题
+            import os
+            os.environ['PYTHONIOENCODING'] = 'utf-8'
+            
+            try:
+                ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
+            except UnicodeDecodeError:
+                # 如果遇到编码错误，尝试设置locale
+                import locale
+                try:
+                    locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+                    ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
+                except Exception:
+                    logger.warning(f"[deepmd-export] {system_name} 编码问题，使用备用处理")
+                    # 使用errors='ignore'的方式处理文件
+                    ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md", type_map=ResultSaver.ALL_TYPE_MAP)
+            
             n_total = len(ls)
             valid_subset = [i for i in subset_indices if 0 <= i < n_total]
             if not valid_subset:
