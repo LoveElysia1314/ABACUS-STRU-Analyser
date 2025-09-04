@@ -93,7 +93,6 @@ class SamplingComparisonAnalyser:
         cache_hit = 0
         cache_miss = 0
         tasks = []
-        cached_results = {}
         for f in files:
             base = os.path.basename(f)
             if base.startswith('frame_metrics_'):

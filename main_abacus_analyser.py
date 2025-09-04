@@ -32,13 +32,6 @@ from src.utils.common import ErrorHandler
 from src.utils.common import FileUtils
 
 
-class AnalysisStep(Enum):
-    """分析步骤枚举"""
-    SAMPLING = 1         # 采样
-    DEEPMD = 2          # DeepMD导出
-    SAMPLING_COMPARE = 3 # 采样效果对比
-
-
 @dataclass
 class AnalysisConfig:
     """分析配置类"""
@@ -90,7 +83,7 @@ class WorkerContext:
     def set_sampling_only(cls, sampling_only: bool):
         """设置采样模式"""
         if cls._analyser:
-            cls._analyser._sampling_only = sampling_only
+            pass
 
 
 def _worker_analyse_system(system_path: str, sample_ratio: float, power_p: float, 
@@ -192,17 +185,6 @@ class AnalysisOrchestrator:
             except (OSError, ValueError) as e:
                 if self.logger:
                     self.logger.warning("停止日志监听器时出错: %s", e)
-    
-    def _sync_sampled_frames_to_targets(self, result: tuple, path_manager: PathManager) -> None:
-        """同步采样帧到PathManager.targets"""
-        if len(result) >= 2:
-            metrics = result[0]
-            system_name_curr = getattr(metrics, 'system_name', 'unknown')
-            sampled_frames_curr = getattr(metrics, 'sampled_frames', [])
-            for target in path_manager.targets:
-                if target.system_name == system_name_curr:
-                    target.sampled_frames = sampled_frames_curr
-                    break
     
     def resolve_search_paths(self) -> List[str]:
         """解析搜索路径，支持通配符展开"""
@@ -459,52 +441,6 @@ class AnalysisOrchestrator:
             path_manager.save_analysis_targets(current_analysis_params)
         except Exception as e:
             self.logger.warning(f"保存analysis_targets.json时出错: {e}")
-    
-    def _handle_skipped_systems_deepmd_export(self, skipped_targets: List) -> None:
-        """处理被跳过体系的DeepMD导出"""
-        if not skipped_targets:
-            return
-            
-        self.logger.info(f"检查 {len(skipped_targets)} 个跳过体系的DeepMD导出需求...")
-        
-        for target in skipped_targets:
-            # 检查是否需要导出DeepMD数据
-            should_skip, reason = ResultSaver.should_skip_analysis(self.current_output_dir, target.system_name)
-            
-            # 如果只有采样结果，需要导出DeepMD
-            if reason == "采样结果已存在":
-                try:
-                    self.logger.info(f"{target.system_name} 需要补充DeepMD导出")
-                    # 从analysis_targets.json中获取采样帧信息
-                    targets_file = os.path.join(self.current_output_dir, "analysis_targets.json")
-                    if os.path.exists(targets_file):
-                        with open(targets_file, 'r', encoding='utf-8') as f:
-                            targets_data = json.load(f)
-                        
-                        # 查找对应体系的采样帧
-                        sampled_frames = None
-                        for mol_name, mol_data in targets_data.get('molecules', {}).items():
-                            for sys_name, sys_data in mol_data.get('systems', {}).items():
-                                if sys_name == target.system_name:
-                                    sampled_frames = sys_data.get('sampled_frames')
-                                    break
-                            if sampled_frames is not None:
-                                break
-                        
-                        if sampled_frames:
-                            # 执行DeepMD导出
-                            out_root = os.path.join(self.current_output_dir, 'deepmd_npy_per_system')
-                            ResultSaver.export_sampled_frames_per_system(
-                                frames=[],  # 对于跳过的体系，我们没有frames数据
-                                sampled_frame_ids=sampled_frames if isinstance(sampled_frames, list) else json.loads(sampled_frames),
-                                system_path=target.system_path,
-                                output_root=out_root,
-                                system_name=target.system_name,
-                                logger=self.logger,
-                                force=False
-                            )
-                except Exception as e:
-                    self.logger.warning(f"{target.system_name} DeepMD导出失败: {e}")
 
 
 class WorkflowExecutor:
