@@ -339,13 +339,12 @@ class PathManager:
             return False
 
     def load_from_discovery(
-        self, records_or_paths, preserve_existing: bool = False
+        self, records_or_paths
     ) -> None:
         """从发现结果加载分析目标
 
         Args:
                 records_or_paths: LightweightSystemRecord列表或搜索路径列表
-                preserve_existing: 是否保留已有的状态信息
         """
         # 判断传入的是records还是search_paths
         if records_or_paths and hasattr(records_or_paths[0], 'system_path'):

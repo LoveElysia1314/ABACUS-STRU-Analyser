@@ -119,7 +119,7 @@ class PowerMeanSampler:
 class RandomSampler:
     @staticmethod
     def select_frames(
-        points: np.ndarray, k: int, **kwargs
+        points: np.ndarray, k: int
     ) -> Tuple[List[int], int, float]:
         n = len(points)
         if k >= n:
@@ -131,7 +131,7 @@ class RandomSampler:
 class UniformSampler:
     @staticmethod
     def select_frames(
-        points: np.ndarray, k: int, **kwargs
+        points: np.ndarray, k: int
     ) -> Tuple[List[int], int, float]:
         n = len(points)
         if k >= n:
@@ -163,7 +163,7 @@ class SamplingStrategy:
         return np.round(np.linspace(0, n-1, k)).astype(int)
 
     @staticmethod
-    def create_sampler(strategy: str = POWER_MEAN, **kwargs):
+    def create_sampler(strategy: str = POWER_MEAN):
         if strategy == SamplingStrategy.POWER_MEAN:
             return PowerMeanSampler()
         elif strategy == SamplingStrategy.RANDOM:
@@ -186,7 +186,6 @@ class GreedyMaxDistanceSampler:
         frame_nLdRMS_values: Optional[np.ndarray] = None,
         num_runs: int = 10,
         seed: int = 42,
-        **kwargs,
     ) -> Tuple[List[int], int, float]:
         """
         使用贪婪策略选择最大化平均距离的帧子集
@@ -267,7 +266,7 @@ class GreedyMaxDistanceSampler:
 
 
 # Statistical analysis utilities (merged from math_utils.py)
-def calculate_improvement(sample_val: float, baseline_mean: float, baseline_std: float = None) -> float:
+def calculate_improvement(sample_val: float, baseline_mean: float) -> float:
     """Calculate percentage improvement over baseline.
 
     Args:

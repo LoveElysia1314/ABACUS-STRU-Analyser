@@ -36,8 +36,7 @@ def run_parallel_tasks(
     initargs: Optional[Tuple] = None,
     log_queue: Any = None,
     logger: Optional[logging.Logger] = None,
-    desc: str = "任务",
-    chunksize: int = 1
+    desc: str = "任务"
 ) -> List[Any]:
     """
     通用并行任务分发与收集

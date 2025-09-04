@@ -232,12 +232,8 @@ class ResultSaver:
         sampled_frames: List[int],
         pca_components_data: List[Dict] = None,
         rmsd_per_frame: List[float] = None,
-        incremental: bool = False,
     ) -> None:
         """Save individual frame metrics to CSV file, with energy/force info if available
-        
-        Args:
-            incremental: If True, append to existing file instead of overwriting
         """
         single_analysis_dir = os.path.join(output_dir, NEW_DIR_SINGLE)
         FileUtils.ensure_dir(single_analysis_dir)
