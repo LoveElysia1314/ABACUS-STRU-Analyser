@@ -588,37 +588,21 @@ class PathManager:
                     frame_count = len(target.stru_files)
                     sampled_count = len(final_frames)
 
-                    # 记录采样参数 - 防None覆盖（仍保留）
-                    if sampled_origin in ("new", "updated") and sampled_count > 0:
-                        if params_hash:
-                            sys_entry["params_hash_at_sampling"] = params_hash
-                        if analysis_params:
-                            if "power_p" in analysis_params:
-                                sys_entry["power_p_at_sampling"] = analysis_params["power_p"]
-                            if "pca_variance_ratio" in analysis_params:
-                                sys_entry["pca_ratio_at_sampling"] = analysis_params["pca_variance_ratio"]
 
                     # 按需以紧凑字符串格式存储 sampled_frames 以减少文件体积
                     sampled_frames_serialized = json.dumps(final_frames, separators=(",", ":"))
-
-                    # 防None覆盖：保留旧值如果新值为空
-                    def safe_update(key, new_val):
-                        if new_val is not None and new_val != "":
-                            sys_entry[key] = new_val
-                        elif key not in sys_entry:
-                            sys_entry[key] = new_val
-
-                    safe_update("system_path", target.system_path)
-                    safe_update("stru_files_count", frame_count)
-                    safe_update("source_hash", target.source_hash)
-                    safe_update("frame_count", frame_count)
-                    # 不再写入 md_dumpfreq / md_nstep，仅保留 expected_frame_count
-                    safe_update("expected_frame_count", target.expected_frame_count)
-                    sys_entry["sampled_frames"] = sampled_frames_serialized  # 总是更新
-                    sys_entry["sampled_count"] = sampled_count
-                    # 移除 sampled_origin / status / integrity 冗余字段
-
-                    mol_entry["systems"][sys_name] = sys_entry
+                    # 构造结构化 system_entry，仅保留体系相关字段（白名单）
+                    system_entry = {
+                        "system_path": target.system_path,
+                        "source_hash": target.source_hash,
+                        "frame_count": frame_count,
+                        "expected_frame_count": target.expected_frame_count,
+                        "sampled_frames": sampled_frames_serialized,
+                        "sampled_count": sampled_count,
+                    }
+                    # 移除值为None的字段
+                    system_entry = {k: v for k, v in system_entry.items() if v is not None}
+                    mol_entry["systems"][sys_name] = system_entry
 
             # 原子写入
             with open(temp_file, 'w', encoding='utf-8') as f:

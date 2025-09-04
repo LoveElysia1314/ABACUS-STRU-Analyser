@@ -5,7 +5,10 @@
 
 
 高效的 ABACUS 分子动力学轨迹分析工具 / Efficient ABACUS MD Trajector### 2025-09
-- ✨ **体系粒度任务池+并行调度重构**：主入口支持 --scheduler 参数，进程池/线程池/旧逻辑三种调度可选，推荐 process，极大量体系高效并行
+- ✨ **体系粒度- 🛠 **日志精简**：消除 "0/0 待处理" 等冗余信息，输出更聚焦
+- 🔄 **复用判定范围修正**：仅对待处理体系执行采样复用计算，避免统计矛盾
+- 🧹 **统一参数顶层化**：params_hash_at_sampling / power_p_at_sampling / pca_ratio_at_sampling 等统一参数移至顶层 metadata，体系层面不再冗余
+- 🛠 **若干鲁棒性修复**：异常捕获与文件原子写提升+并行调度重构**：主入口支持 --scheduler 参数，进程池/线程池/旧逻辑三种调度可选，推荐 process，极大量体系高效并行
 - 🛠 **参数解析与主流程缩进修复**：修复参数解析缩进，所有新参数（如 --scheduler）均可正常解析
 - ✨ **DeepMD 导出内聚化**：DeepMD 导出逻辑合并进 ResultSaver 并体系完成即触发
 - ⚡ **全量流式输出**：system_metrics_summary、frame_metrics、mean_structure、采样对比 CSV 均实时写入
@@ -210,6 +213,7 @@ analysis_results/
 - **帧数校验**：实际帧数不足预期时自动排除体系，避免无效分析（仅保留 expected_frame_count 字段）
 - **参数哈希/采样参数**：每次采样均记录参数哈希与关键参数，复用时严格校验
 - **精简字段**：移除 integrity / status / sampled_origin 等冗余字段，仅保留复用所需核心信息（sampled_frames, source_hash, expected_frame_count, 参数快照）
+- **统一参数顶层化**：params_hash_at_sampling / power_p_at_sampling / pca_ratio_at_sampling 等统一参数仅记录在顶层 metadata，无需在每个体系冗余
 - **atomic写入**：所有写入均为原子操作，防止中断导致文件损坏
 
 ### 热更新与断点续算
