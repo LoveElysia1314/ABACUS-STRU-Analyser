@@ -437,14 +437,18 @@ class AnalysisOrchestrator:
         return analysis_results
     
     def _export_sampled_frames(self, result: tuple, system_path: str, system_name: str) -> None:
-        """导出采样帧为DeepMD格式"""
+        """导出采样帧为DeepMD格式（修正：frames为完整帧对象，sampled_frame_ids为帧号）"""
         if len(result) >= 2:
             try:
-                sampled_frames = result[1]
+                sampled_frame_ids = result[1]
                 out_root = os.path.join(self.current_output_dir, 'deepmd_npy_per_system')
+                # 用dpdata加载完整帧对象
+                import dpdata
+                ls = dpdata.LabeledSystem(system_path, fmt="abacus/lcao/md")
+                # dpdata.LabeledSystem支持下标访问，帧对象可直接传递
                 ResultSaver.export_sampled_frames_per_system(
-                    frames=sampled_frames,
-                    sampled_frame_ids=list(range(len(sampled_frames))),
+                    frames=ls,
+                    sampled_frame_ids=sampled_frame_ids,
                     system_path=system_path,
                     output_root=out_root,
                     system_name=system_name,
@@ -663,7 +667,7 @@ class WorkflowExecutor:
             self.orchestrator.logger.error(f"采样效果对比分析失败: {e}")
     
     def load_existing_results_for_deepmd(self, config: AnalysisConfig) -> Tuple[List[tuple], PathManager, str]:
-        """为DeepMD导出加载已有的分析结果"""
+        """为DeepMD导出加载已有的分析结果，确保正确解析 system_path 和 sampled_frames"""
         self.orchestrator.logger.info("加载已有结果用于DeepMD导出...")
         
         # 设置输出目录
@@ -687,22 +691,24 @@ class WorkflowExecutor:
                 systems = mol_data.get('systems', {})
                 for system_name, system_data in systems.items():
                     system_path = system_data.get('system_path', '')
-                    sampled_frames_str = system_data.get('sampled_frames', '[]')
-                    
-                    # 解析采样帧列表
-                    try:
-                        if isinstance(sampled_frames_str, str):
-                            sampled_frames = json.loads(sampled_frames_str)
-                        else:
-                            sampled_frames = sampled_frames_str
-                    except:
-                        self.orchestrator.logger.warning(f"无法解析采样帧数据: {system_name}")
-                        continue
-                    
+                    sampled_frames = []
+                    # robustly parse sampled_frames (may be str or list)
+                    sampled_frames_raw = system_data.get('sampled_frames', [])
+                    if isinstance(sampled_frames_raw, str):
+                        try:
+                            sampled_frames = json.loads(sampled_frames_raw)
+                        except Exception:
+                            self.orchestrator.logger.warning(f"无法解析采样帧数据: {system_name}, 内容: {sampled_frames_raw}")
+                            sampled_frames = []
+                    elif isinstance(sampled_frames_raw, list):
+                        sampled_frames = sampled_frames_raw
+                    else:
+                        sampled_frames = []
+                    # 过滤非int类型
+                    sampled_frames = [int(x) for x in sampled_frames if isinstance(x, int) or (isinstance(x, float) and x.is_integer())]
                     if not system_path or not sampled_frames:
                         self.orchestrator.logger.warning(f"系统数据不完整，跳过: {system_name}")
                         continue
-                    
                     # 解析系统信息
                     import re
                     match = re.match(r"struct_mol_(\d+)_conf_(\d+)_T(\d+)K", system_name)
@@ -715,7 +721,6 @@ class WorkflowExecutor:
                         mol_id_parsed = mol_id
                         conf = "0"
                         temperature = "300"
-                    
                     # 创建TrajectoryMetrics对象
                     from src.core.metrics import TrajectoryMetrics
                     metrics = TrajectoryMetrics(
@@ -727,19 +732,14 @@ class WorkflowExecutor:
                     )
                     metrics.sampled_frames = sampled_frames
                     metrics.num_frames = len(sampled_frames)
-                    
                     # 构造分析结果元组（格式: (metrics, sampled_frames)）
                     result = (metrics, sampled_frames)
                     analysis_results.append(result)
-                    
                     self.orchestrator.logger.info(f"加载采样数据: {system_name}, 采样帧数: {len(sampled_frames)}")
-            
             self.orchestrator.logger.info(f"成功加载 {len(analysis_results)} 个系统的采样数据")
-            
         except Exception as e:
             self.orchestrator.logger.error(f"读取analysis_targets.json文件失败: {e}")
             return [], path_manager, actual_output_dir
-        
         return analysis_results, path_manager, actual_output_dir
     
     def load_existing_results_for_compare(self, config: AnalysisConfig) -> Tuple[List[tuple], PathManager, str]:
