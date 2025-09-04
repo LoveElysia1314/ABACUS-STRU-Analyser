@@ -137,15 +137,17 @@ class RMSDCalculator:
             # 按frame_id排序
             all_frames.sort(key=lambda x: x.frame_id)
 
-            # 将帧号映射到数组索引（帧号 // 10）
+            # 创建帧号到数组索引的映射
+            frame_id_to_index = {frame.frame_id: idx for idx, frame in enumerate(all_frames)}
+
+            # 将帧号映射到数组索引
             array_indices = []
             for frame_id in frame_indices:
-                idx = frame_id // 10
-                if idx < len(all_frames):
-                    array_indices.append(idx)
+                if frame_id in frame_id_to_index:
+                    array_indices.append(frame_id_to_index[frame_id])
                 else:
                     if logger:
-                        logger.warning(f"帧号 {frame_id} 对应的数组索引 {idx} 超出范围 (总帧数: {len(all_frames)})")
+                        logger.warning(f"帧号 {frame_id} 在轨迹数据中不存在 (可用帧号范围: {min(frame_id_to_index.keys()) if frame_id_to_index else 'N/A'} - {max(frame_id_to_index.keys()) if frame_id_to_index else 'N/A'})")
 
             if len(array_indices) < 2:
                 if logger:

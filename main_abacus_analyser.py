@@ -7,6 +7,7 @@ ABACUS主分析器程序 - 重构版本
 """
 
 import os
+import sys
 import time
 import argparse
 import logging
@@ -16,6 +17,11 @@ import json
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+
+# 添加项目根目录到 Python 路径
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # 导入自定义模块
 from src.utils.logmanager import LoggerManager
@@ -650,7 +656,7 @@ class WorkflowExecutor:
         
         try:
             # 导入采样对比模块
-            from src.analysis.sampling_comparison import analyse_sampling_compare
+            from src.analysis.sampling_comparison_analyser import analyse_sampling_compare
             
             # 获取工作进程数
             workers = self.orchestrator.determine_workers()

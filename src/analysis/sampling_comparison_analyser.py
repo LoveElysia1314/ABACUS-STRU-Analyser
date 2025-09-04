@@ -12,10 +12,10 @@ from glob import glob
 from typing import List
 import warnings
 
-from ...utils import LoggerManager
-from ...core.metrics import MetricsToolkit
-from ...core.sampler import SamplingStrategy, calculate_improvement
-from ...core.system_analyser import RMSDCalculator
+from src.utils import LoggerManager
+from src.core.metrics import MetricsToolkit
+from src.core.sampler import SamplingStrategy, calculate_improvement
+from src.core.system_analyser import RMSDCalculator
 
 warnings.filterwarnings('ignore')
 
